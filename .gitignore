@@ -1,13 +1,33 @@
-# env python
-.venv
-envs
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+envs/
 
-# python stuff
-__pycache__
-*.pyc
-*.pyo
-*.pyd
-*.egg-info
+# Python caching & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
 
-# IDE
-.vscode
+# IDEs and Editors
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
