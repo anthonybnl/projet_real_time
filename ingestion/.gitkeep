@@ -1,0 +1,5 @@
+# Ingestion Service
+
+Service d'ingestion de données depuis une API externe vers Kafka.
+
+TODO: À implémenter
