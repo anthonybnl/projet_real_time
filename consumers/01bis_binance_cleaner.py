@@ -1,6 +1,6 @@
 """
-Consumer 1: Nettoyage et extraction des données BTC Coinbase
-Lit depuis coinbase.btc.usd et produit vers btc.cleaned
+Consumer 1bis: Nettoyage et extraction des données BTC Binance
+Lit depuis binance.btc.usdt.trades et produit vers btc.cleaned
 """
 
 import json
@@ -10,9 +10,9 @@ from kafka.admin import NewTopic
 from kafka.errors import KafkaError, TopicAlreadyExistsError
 
 BOOTSTRAP_SERVERS = "localhost:9092"
-INPUT_TOPIC = "coinbase.btc.usd.trades"
+INPUT_TOPIC = "binance.btc.usd.trades"
 OUTPUT_TOPIC = "btc.cleaned"
-GROUP_ID = "btc-cleaner-group"
+GROUP_ID = "btc-binance-cleaner-group"
 
 
 def create_topic_if_not_exists(
@@ -69,22 +69,27 @@ def create_topic_if_not_exists(
 
 
 def handle_message(data, producer: KafkaProducer):
-    """Extrait et nettoie les données du ticker Coinbase"""
+    """Extrait et nettoie les données du trade Binance"""
 
     cleaned = None
 
-    # on extrait les informations qui nous intéressent
     try:
-        price = float(data.get("price", 0))
-        trade_size = float(data.get("last_size", 0))
-
+        price = float(data.get("p", 0))
+        trade_size = float(data.get("q", 0))
+        trade_time_ms = int(data.get("T", 0))
+        
+        timestamp = datetime.fromtimestamp(trade_time_ms / 1000.0).isoformat() + 'Z'
+        
+        is_buyer_maker = data.get("m", False)
+        side = "sell" if is_buyer_maker else "buy"
+        
         cleaned = {
-            "timestamp": data.get("time"),
+            "timestamp": timestamp,
             "price": price,
             "trade_size": trade_size,
-            "side": data.get("side"),
-            "id": data.get("trade_id"),
-            "product_id": data.get("product_id", "BTC-USD"),
+            "side": side,
+            "id": data.get("t"),
+            "product_id": data.get("s", "BTCUSDT"),
         }
 
     except (ValueError, TypeError, KeyError) as e:
