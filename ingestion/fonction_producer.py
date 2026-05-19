@@ -2,10 +2,13 @@ import asyncio
 import websockets
 import json
 import time
+import logging
 from datetime import datetime
 from kafka import KafkaProducer
 from kafka.admin import KafkaAdminClient, NewTopic
 from kafka.errors import KafkaError, TopicAlreadyExistsError
+
+logger = logging.getLogger("ingestion")
 
 def create_topic_if_not_exists(
     num_partitions: int = 3,
@@ -14,13 +17,13 @@ def create_topic_if_not_exists(
     topic_name: list[str] = ['coinbase.btc.usd.trades', 'binance.btc.usd.trades'],
 ):
     """
-    Crée un topic Kafka seulement s'il n'existe pas déjà
+    Crée des topics Kafka seulement s'ils n'existent pas déjà
     
     Args:
-        topic_name: Nom du topic à créer
         num_partitions: Nombre de partitions (défaut: 3)
         replication_factor: Facteur de réplication (défaut: 1)
         bootstrap_servers: Adresse du broker Kafka
+        topic_name: Liste des noms des topics à créer
     """
     admin_client = KafkaAdminClient(
         bootstrap_servers=bootstrap_servers,
@@ -31,31 +34,32 @@ def create_topic_if_not_exists(
         # Récupérer la liste des topics existants
         existing_topics = admin_client.list_topics()
         
-        for topic_name in topic_name:
-            if topic_name in existing_topics:
-                print(f"[OK] Le topic '{topic_name}' existe déjà")
-                print(f"   Partitions: {num_partitions} (configuration demandée)")
-                return False
-            
-            # Créer le topic
-        topic = NewTopic(
-            name=topic_name,
-            num_partitions=num_partitions,
-            replication_factor=replication_factor
-        )
+        new_topics_to_create = []
+        for name in topic_name:
+            if name in existing_topics:
+                logger.info(f"Le topic '{name}' existe déjà (Partitions: {num_partitions})")
+            else:
+                new_topics_to_create.append(
+                    NewTopic(
+                        name=name,
+                        num_partitions=num_partitions,
+                        replication_factor=replication_factor
+                    )
+                )
         
-        admin_client.create_topics(new_topics=[topic], validate_only=False)
-        print(f"[OK] Topic '{topic_name}' créé avec succès")
-        print(f"   - Partitions: {num_partitions}")
-        print(f"   - Replication factor: {replication_factor}")
-        return True
+        if new_topics_to_create:
+            admin_client.create_topics(new_topics=new_topics_to_create, validate_only=False)
+            for t in new_topics_to_create:
+                logger.info(f"Topic '{t.name}' créé avec succès (Partitions: {num_partitions}, Replication factor: {replication_factor})")
+            return True
+        return False
         
     except TopicAlreadyExistsError:
-        print(f"[OK] Le topic '{topic_name}' existe déjà (détecté lors de la création)")
+        logger.info("Un des topics existe déjà (détecté lors de la création)")
         return False
         
     except Exception as e:
-        print(f"[ERROR] Erreur lors de la création du topic: {e}")
+        logger.error(f"Erreur lors de la création du topic: {e}", exc_info=True)
         raise
         
     finally:
@@ -78,10 +82,10 @@ async def coinbase_consumer(shared_state, producer, url, topic_name="coinbase.bt
     
     while True:
         try:
-            print(f"[Coinbase] Connexion au WebSocket: {url}")
+            logger.info(f"[Coinbase] Connexion au WebSocket: {url}")
             async with websockets.connect(url) as websocket:
                 await websocket.send(json.dumps(subscribe_msg))
-                print("[Coinbase] Abonnement envoye avec succes")
+                logger.info("[Coinbase] Abonnement envoyé avec succès")
                 
                 # Reset last_coinbase_time to current time upon connection
                 shared_state["last_coinbase_time"] = time.time()
@@ -93,13 +97,12 @@ async def coinbase_consumer(shared_state, producer, url, topic_name="coinbase.bt
                         
                     data = json.loads(message)
                     
-                    # Mettre a jour l'horodatage pour prouver que Coinbase est en vie
+                    # Mettre à jour l'horodatage pour prouver que Coinbase est en vie
                     shared_state["last_coinbase_time"] = time.time()
                     
                     if shared_state["active_source"] == "coinbase":
                         key_val = data.get('trade_id')
                         price_val = data.get('price')
-                        message_type = data.get('type', 'unknown')
                         
                         if key_val is not None and price_val is not None:
                             producer.send(
@@ -107,21 +110,20 @@ async def coinbase_consumer(shared_state, producer, url, topic_name="coinbase.bt
                                 key=str(key_val).encode('utf-8'),
                                 value=data
                             )
-                            print(f"[Coinbase - ACTIVE] Message envoye au topic {topic_name} [{message_type}]: {price_val}")
         except websockets.ConnectionClosed:
-            print("[Coinbase] Connexion fermee, tentative de reconnexion dans 5 secondes...")
+            logger.warning("[Coinbase] Connexion fermée, tentative de reconnexion dans 5 secondes...")
         except Exception as e:
-            print(f"[Coinbase - ERROR] {e}, tentative de reconnexion dans 5 secondes...")
+            logger.error(f"[Coinbase] Erreur: {e}", exc_info=True)
         
         await asyncio.sleep(5)
 
 
-async def binance_consumer(shared_state, producer, url,topic_name="binance.btc.usd.trades"):
+async def binance_consumer(shared_state, producer, url, topic_name="binance.btc.usd.trades"):
     while True:
         try:
-            print(f"[Binance] Connexion au WebSocket: {url}")
+            logger.info(f"[Binance] Connexion au WebSocket: {url}")
             async with websockets.connect(url) as websocket:
-                print("[Binance] Connecte avec succes")
+                logger.info("[Binance] Connecté avec succès")
                 
                 async for message in websocket:
                     data = json.loads(message)
@@ -129,7 +131,6 @@ async def binance_consumer(shared_state, producer, url,topic_name="binance.btc.u
                     if shared_state["active_source"] == "binance":
                         key_val = data.get('E')  # Event time
                         price_val = data.get('p')  # Price
-                        message_type = data.get('e', 'unknown')  # Event type
                         
                         if key_val is not None and price_val is not None:
                             producer.send(
@@ -137,28 +138,27 @@ async def binance_consumer(shared_state, producer, url,topic_name="binance.btc.u
                                 key=str(key_val).encode('utf-8'),
                                 value=data
                             )
-                            print(f"[Binance - FALLBACK ACTIVE] Message envoye au topic {topic_name} [{message_type}]: {price_val}")
         except websockets.ConnectionClosed:
-            print("[Binance] Connexion fermee, tentative de reconnexion dans 5 secondes...")
+            logger.warning("[Binance] Connexion fermée, tentative de reconnexion dans 5 secondes...")
         except Exception as e:
-            print(f"[Binance - ERROR] {e}, tentative de reconnexion dans 5 secondes...")
+            logger.error(f"[Binance] Erreur: {e}", exc_info=True)
         
         await asyncio.sleep(5)
 
 
 async def monitor_health(shared_state, timeout=3.0):
-    print(f"[Monitor] Demarrage de la surveillance (timeout={timeout}s)")
+    logger.info(f"[Monitor] Démarrage de la surveillance (timeout={timeout}s)")
     while True:
         now = time.time()
         elapsed = now - shared_state["last_coinbase_time"]
         
         if elapsed > timeout:
             if shared_state["active_source"] != "binance":
-                print(f"[Monitor] !!! Coinbase inactif depuis {elapsed:.2f}s. Bascule sur Binance !!!")
+                logger.warning(f"[Monitor] !!! Coinbase inactif depuis {elapsed:.2f}s. Bascule sur Binance !!!")
                 shared_state["active_source"] = "binance"
         else:
             if shared_state["active_source"] != "coinbase":
-                print(f"[Monitor] *** Coinbase a repris apres {elapsed:.2f}s. Retour sur Coinbase ***")
+                logger.info(f"[Monitor] *** Coinbase a repris après {elapsed:.2f}s. Retour sur Coinbase ***")
                 shared_state["active_source"] = "coinbase"
                 
         await asyncio.sleep(0.5)
@@ -197,12 +197,12 @@ async def producer_stream(
         await asyncio.gather(
             coinbase_consumer(shared_state, producer, coinbase_url),
             binance_consumer(shared_state, producer, binance_url),
-            monitor_health(shared_state, timeout=3.0)
+            monitor_health(shared_state, timeout=2.0)
         )
     except asyncio.CancelledError:
-        print("Taches annulees")
+        logger.info("Tâches annulées par l'utilisateur")
     except Exception as e:
-        print(f"Error: {e}")
+        logger.error(f"Erreur générale dans producer_stream: {e}", exc_info=True)
     finally:
         producer.close()
-        print("Kafka Producer closed")
+        logger.info("Kafka Producer fermé proprement")
