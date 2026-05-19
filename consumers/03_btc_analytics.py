@@ -115,7 +115,7 @@ def create_consumer():
         INPUT_TOPIC,
         bootstrap_servers=BOOTSTRAP_SERVERS,
         group_id=GROUP_ID,
-        auto_offset_reset="latest",
+        auto_offset_reset="earliest",
         enable_auto_commit=True,
         auto_commit_interval_ms=1000,
         value_deserializer=lambda m: json.loads(m.decode("utf-8")),
