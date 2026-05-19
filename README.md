@@ -2,6 +2,8 @@
 
 Projet M1 Data Engineering & IA - Plateforme de traitement de données temps réel avec Kafka, MongoDB et API.
 
+**Document du TP** : [énoncé projet](doc/Real-Time%20_%20Crypto%20Market%20Monitoring%20System.md)
+
 ## 🏗️ Architecture
 
 ```
@@ -18,7 +20,7 @@ Projet M1 Data Engineering & IA - Plateforme de traitement de données temps ré
     └─┬──┬──┬───┘
       │  │  │
    ┌──▼─ ▼─ ▼──────┐
-   │  3 Consumers   │ (Traitement des données)
+   │  N Consumers   │ (Traitement des données)
    └──────┬─────────┘
           │
      ┌────▼─────┐
