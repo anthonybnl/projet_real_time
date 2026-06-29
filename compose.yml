@@ -65,7 +65,7 @@ services:
 
   mongo-express:
     image: mongo-express:1.0.2
-    container_name: mongo_express
+    container_name: rt_mongo_express
     restart: unless-stopped
     networks:
       - kafka-net
@@ -78,6 +78,41 @@ services:
       ME_CONFIG_BASICAUTH_PASSWORD: admin
     depends_on:
       - mongo
+
+  api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    container_name: crypto-api
+    ports:
+      - "8000:8000"
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
+      MONGODB_URI: mongodb://mongo:27017
+      USE_MOCK: "true"
+    depends_on:
+      - kafka
+      - mongo
+    networks:
+      - kafka-net
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: crypto-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_BASE: "http://localhost:8000"
+      NEXT_PUBLIC_WS_URL: "ws://localhost:8000/ws/stream"
+      BACKEND_URL: "http://api:8000"
+    depends_on:
+      - api
+    networks:
+      - kafka-net
+    restart: unless-stopped
 
 volumes:
   kafka_data:
