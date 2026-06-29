@@ -4,7 +4,7 @@ Lit depuis binance.btc.usdt.trades et produit vers btc.cleaned
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from kafka import KafkaConsumer, KafkaProducer, KafkaAdminClient
 from kafka.admin import NewTopic
 from kafka.errors import KafkaError, TopicAlreadyExistsError
@@ -77,8 +77,14 @@ def handle_message(data, producer: KafkaProducer):
         price = float(data.get("p", 0))
         trade_size = float(data.get("q", 0))
         trade_time_ms = int(data.get("T", 0))
-        
-        timestamp = datetime.fromtimestamp(trade_time_ms / 1000.0).isoformat() + 'Z'
+
+        # UTC explicite : fromtimestamp sans tz renverrait l'heure locale du
+        # serveur, qu'on étiquetterait à tort comme UTC (suffixe Z).
+        timestamp = (
+            datetime.fromtimestamp(trade_time_ms / 1000.0, tz=timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
         
         is_buyer_maker = data.get("m", False)
         side = "sell" if is_buyer_maker else "buy"
@@ -90,6 +96,7 @@ def handle_message(data, producer: KafkaProducer):
             "side": side,
             "id": data.get("t"),
             "product_id": data.get("s", "BTCUSDT"),
+            "source": "binance",
         }
 
     except (ValueError, TypeError, KeyError) as e:

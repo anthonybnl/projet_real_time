@@ -6,6 +6,7 @@ Lit depuis btc.cleaned et insere en lot dans MongoDB toutes les 1s
 import json
 import os
 import time
+from datetime import datetime
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 from pymongo import MongoClient, ASCENDING
@@ -27,6 +28,27 @@ MONGO_COLLECTION = "btc_trades"
 # Configuration du buffer
 FLUSH_INTERVAL_SECONDS = 1.0
 MAX_BUFFER_SIZE = 500  # Garde-fou si un burst arrive
+
+
+def to_mongo_doc(value):
+    """
+    Prepare un message btc.cleaned pour l'insertion Mongo.
+
+    Le topic Kafka transporte du JSON : timestamp y est une string ISO-8601 UTC.
+    On la convertit ici en datetime Python, que pymongo serialise en Date BSON.
+    C'est indispensable pour que l'agregation analytics puisse faire des $match
+    et $dateTrunc sur un vrai champ date indexe (et non une comparaison de strings).
+    """
+    doc = dict(value)
+    ts = doc.get("timestamp")
+    if isinstance(ts, str):
+        try:
+            # fromisoformat ne gere pas le suffixe 'Z' avant Python 3.11
+            doc["timestamp"] = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            print(f"Timestamp non parsable, document ignore: {ts!r}")
+            return None
+    return doc
 
 
 def create_mongo_client():
@@ -99,7 +121,10 @@ def main():
         print("Traitement en cours...\n")
 
         for message in consumer:
-            buffer.append(message.value)
+            doc = to_mongo_doc(message.value)
+            if doc is None:
+                continue
+            buffer.append(doc)
 
             # Conditions de flush: temps ecoule OU buffer plein
             elapsed = time.time() - last_flush

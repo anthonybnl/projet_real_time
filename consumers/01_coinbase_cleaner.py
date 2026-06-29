@@ -85,6 +85,7 @@ def handle_message(data, producer: KafkaProducer):
             "side": data.get("side"),
             "id": data.get("trade_id"),
             "product_id": data.get("product_id", "BTC-USD"),
+            "source": "coinbase",
         }
 
     except (ValueError, TypeError, KeyError) as e:

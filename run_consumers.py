@@ -33,7 +33,7 @@ BASE_CONSUMERS = [
     ("01_coinbase_cleaner",      "01_coinbase_cleaner.py"),
     ("01bis_binance_cleaner",    "01bis_binance_cleaner.py"),
     ("02_coinbase_mongo",        "02_coinbase_mongo_consumer.py"),
-    ("03_btc_analytics",         "03_btc_analytics.py"),
+    # ("03_btc_analytics",         "03_btc_analytics.py"),
 ]
 
 DETECTOR_VERSIONS = {
