@@ -9,6 +9,7 @@ from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 from pymongo import MongoClient, ASCENDING
 from pymongo.errors import PyMongoError
+import os
 
 # Configuration Kafka
 BOOTSTRAP_SERVERS = "localhost:9092"
@@ -16,8 +17,8 @@ INPUT_TOPIC = "btc.cleaned"
 GROUP_ID = "btc-mongo-consumer-group"
 
 # Configuration MongoDB
-MONGO_URI = "mongodb://root:example@localhost:27017/?directConnection=true"
-MONGO_DB = "crypto_realtime"
+MONGO_URI = os.environ["MONGODB_URI"]
+MONGO_DB = os.environ["MONGODB_DB"]
 MONGO_COLLECTION = "btc_trades"
 
 # Configuration du buffer
