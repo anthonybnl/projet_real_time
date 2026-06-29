@@ -65,7 +65,7 @@ services:
 
   mongo-express:
     image: mongo-express:1.0.2
-    container_name: mongo_express
+    container_name: rt_mongo_express
     restart: unless-stopped
     networks:
       - kafka-net
@@ -78,17 +78,6 @@ services:
       ME_CONFIG_BASICAUTH_PASSWORD: admin
     depends_on:
       - mongo
-
-  mongo:
-    image: mongo:7
-    container_name: mongo
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo_data:/data/db
-    networks:
-      - kafka-net
-    restart: unless-stopped
 
   api:
     build:
