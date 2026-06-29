@@ -14,7 +14,7 @@ BOOTSTRAP_SERVERS = "localhost:9092"
 INPUT_TOPIC = "btc.cleaned"
 GROUP_ID = "btc-analytics-group"
 
-MONGO_URI = "mongodb://root:example@localhost:27017/"
+MONGO_URI = "mongodb://root:example@localhost:27017/?directConnection=true"
 MONGO_DB = "crypto_realtime"
 MONGO_COLLECTION = "btc_analytics"
 

@@ -17,6 +17,13 @@ router = APIRouter()
 USE_MOCK = os.getenv("USE_MOCK", "true").lower() == "true"
 
 
+async def _tracked_symbols() -> list[str]:
+    if USE_MOCK:
+        return store.symbols()
+    from db import get_tracked_symbols
+    return await get_tracked_symbols()
+
+
 @router.get("/trades")
 async def get_trades(
     symbol: str | None = Query(None, description="Filter by symbol, e.g. BTCUSDT"),
@@ -40,10 +47,10 @@ async def get_stats(
             return store.get_stats(symbol=symbol, window=closest)
         return {"windows": WINDOWS, "stats": store.get_all_stats()}
 
-    from db import get_latest_analytics
-    sym = symbol or "BTCUSDT"
-    docs = await get_latest_analytics(symbol=sym, limit=1)
-    return docs[0] if docs else {"symbol": sym, "error": "no data yet"}
+    from db import get_stats as db_get_stats
+    closest = min(WINDOWS, key=lambda w: abs(w - window))
+    sym = symbol or "BTC-USD"
+    return await db_get_stats(sym, closest)
 
 
 @router.get("/alerts")
@@ -58,14 +65,14 @@ async def get_alerts(
 
 
 @router.get("/symbols")
-def get_symbols():
-    return {"symbols": store.symbols()}
+async def get_symbols():
+    return {"symbols": await _tracked_symbols()}
 
 
 @router.get("/health")
-def health():
+async def health():
     return {
         "status": "ok",
         "mode": "mock" if USE_MOCK else "mongodb",
-        "tracked_symbols": store.symbols(),
+        "tracked_symbols": await _tracked_symbols(),
     }

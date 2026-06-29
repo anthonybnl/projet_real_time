@@ -89,9 +89,16 @@ async def _mock_analytics_loop() -> None:
             await manager.broadcast({"type": "analytics", "data": analytics})
 
 
-async def _mongo_ingest_loop() -> None:
+async def _mongo_trades_loop() -> None:
+    from db import trades_change_stream
+    log.info("Ingestion mode: MONGODB trades change stream")
+    async for trade in trades_change_stream():
+        await manager.broadcast({"type": "trade", "data": trade})
+
+
+async def _mongo_analytics_loop() -> None:
     from db import analytics_change_stream
-    log.info("Ingestion mode: MONGODB CHANGE STREAM")
+    log.info("Ingestion mode: MONGODB analytics change stream")
     async for analytics_doc in analytics_change_stream():
         await manager.broadcast({"type": "analytics", "data": analytics_doc})
 
@@ -108,7 +115,10 @@ async def lifespan(app: FastAPI):
             asyncio.create_task(_mock_analytics_loop()),
         ]
     else:
-        tasks = [asyncio.create_task(_mongo_ingest_loop())]
+        tasks = [
+            asyncio.create_task(_mongo_trades_loop()),
+            asyncio.create_task(_mongo_analytics_loop()),
+        ]
     yield
     for task in tasks:
         task.cancel()

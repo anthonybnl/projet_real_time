@@ -51,11 +51,13 @@ function TradeRow({ trade }: TradeRowProps) {
 interface TradesTableProps { trades: Trade[] }
 
 function TradesTable({ trades }: TradesTableProps) {
+  const sorted = [...trades].sort((a, b) => b.timestamp - a.timestamp)
+
   return (
     <div className="bg-crypto-card border border-crypto-border rounded-xl p-4 flex flex-col" style={{ borderWidth: '0.5px' }}>
       <div className="flex justify-between items-center mb-3">
         <span className="text-xs font-medium text-crypto-text">Recent trades</span>
-        <span className="text-[11px] text-crypto-dim">Last {trades.length}</span>
+        <span className="text-[11px] text-crypto-dim">Last {sorted.length}</span>
       </div>
 
       <div className="overflow-y-auto max-h-48">
@@ -69,15 +71,15 @@ function TradesTable({ trades }: TradesTableProps) {
             </tr>
           </thead>
           <tbody>
-            {trades.length === 0 ? (
+            {sorted.length === 0 ? (
               <tr>
                 <td colSpan={4} className="py-4 text-center text-crypto-dim text-[11px]">
                   Waiting for trades…
                 </td>
               </tr>
             ) : (
-              trades.map((t) => (
-                <TradeRow key={`${t.symbol}-${t.timestamp}-${t.price}`} trade={t} />
+              sorted.map((t, i) => (
+                <TradeRow key={`${t.symbol}-${t.timestamp}-${t.price}-${i}`} trade={t} />
               ))
             )}
           </tbody>

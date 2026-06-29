@@ -13,6 +13,7 @@ import { useTheme } from '@/contexts/ThemeContext'
 
 const MAX_POINTS  = 120   // history kept in buffer
 const VISIBLE_BARS = 60   // bars shown in live mode
+const PRICE_ANIM_MS = 450 // smooth transition duration for live price
 const TV_FONT = "'Trebuchet MS', Roboto, Ubuntu, sans-serif"
 
 interface Entry {
@@ -44,6 +45,10 @@ export interface PriceChartHandle {
   reset(): void
 }
 
+function easeOutCubic(t: number) {
+  return 1 - Math.pow(1 - t, 3)
+}
+
 function fmt$(n: number) {
   return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
@@ -60,7 +65,10 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
   const volAccRef    = useRef<{ time: number; buy: number; sell: number } | null>(null)
   const lineColorRef = useRef('#22c55e')
   const isLiveRef    = useRef(true)
-  const legendRef    = useRef<HTMLDivElement>(null)
+  const displayPriceRef = useRef<number | null>(null)
+  const animRef = useRef<{ from: number; to: number; start: number } | null>(null)
+  const rafRef = useRef<number | null>(null)
+  const legendRef = useRef<HTMLDivElement>(null)
   const badgeRef     = useRef<HTMLSpanElement>(null)
   const [isLive, setIsLive] = useState(true)
 
@@ -223,6 +231,7 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
 
     return () => {
       ro.disconnect()
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
       chart.remove()
       chartRef.current = liveRef.current = sessionRef.current = volRef.current = null
     }
@@ -246,42 +255,11 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
   }, [theme])
 
   // ── Imperative handle ─────────────────────────────────────────────────────
-  useImperativeHandle(ref, () => ({
-
-    pushTrade(volume: number, side: 'buy' | 'sell' | 'unknown') {
-      const nowSec = Math.floor(Date.now() / 1000)
-      if (!volAccRef.current || volAccRef.current.time !== nowSec)
-        volAccRef.current = { time: nowSec, buy: 0, sell: 0 }
-      const acc = volAccRef.current
-      if (side === 'buy')       acc.buy  += volume
-      else if (side === 'sell') acc.sell += volume
-      else                      { acc.buy += volume / 2; acc.sell += volume / 2 }
-    },
-
-    push(price: number, sessionAvg?: number) {
-      const nowSec = Math.floor(Date.now() / 1000)
-      const acc    = volAccRef.current
-      const volume  = acc ? acc.buy + acc.sell : 0
-      const buyVol  = acc ? acc.buy : 0
-
-      // Upsert by second
-      const buf  = bufferRef.current
-      const last = buf[buf.length - 1]
-      if (last && last.time === nowSec)
-        buf[buf.length - 1] = { price, sessionAvg: sessionAvg ?? null, volume, buyVol, time: nowSec }
-      else {
-        buf.push({ price, sessionAvg: sessionAvg ?? null, volume, buyVol, time: nowSec })
-        if (buf.length > MAX_POINTS) buf.shift()
-      }
-
-      const live    = liveRef.current
-      const session = sessionRef.current
-      const vol     = volRef.current
-      const chart   = chartRef.current
-      if (!live || !session || !vol || !chart) return
-
-      // Direction
-      const prices = buf.map((e) => e.price)
+  useImperativeHandle(ref, () => {
+    const applyLineColor = (price: number) => {
+      const live = liveRef.current
+      if (!live) return
+      const prices = bufferRef.current.map((e) => e.price)
       const first  = prices[0] ?? price
       const isUp   = price >= first
       const lc     = isUp ? '#22c55e' : '#ef4444'
@@ -292,17 +270,134 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
         bottomColor: isUp ? 'rgba(34,197,94,0)'     : 'rgba(239,68,68,0)',
         crosshairMarkerBackgroundColor: lc,
       })
+    }
 
-      // Save range if user has scrolled back
-      const savedRange = isLiveRef.current ? null : chart.timeScale().getVisibleLogicalRange()
+    const updateBadge = (price: number) => {
+      const prices = bufferRef.current.map((e) => e.price)
+      const first  = prices[0] ?? price
+      if (badgeRef.current && prices.length > 1) {
+        const delta = first > 0 ? ((price - first) / first) * 100 : 0
+        const sign  = delta >= 0 ? '+' : ''
+        badgeRef.current.textContent = `${sign}${delta.toFixed(3)}%`
+        badgeRef.current.style.color = price >= first ? '#22c55e' : '#ef4444'
+      }
+    }
 
-      // Set data for all series
-      live.setData(buf.map((e) => ({ time: e.time as Time, value: e.price })))
+    const syncViewport = () => {
+      const chart = chartRef.current
+      const buf   = bufferRef.current
+      if (!chart || !buf.length) return
+      if (isLiveRef.current) {
+        const lastIdx = buf.length - 1
+        chart.timeScale().setVisibleLogicalRange({
+          from: Math.max(0, lastIdx - VISIBLE_BARS + 1),
+          to:   lastIdx + 8,
+        })
+      }
+    }
 
-      const sessionData = buf.filter((e) => e.sessionAvg != null)
-                             .map((e)    => ({ time: e.time as Time, value: e.sessionAvg! }))
-      if (sessionData.length > 0) session.setData(sessionData)
+    const paintLivePoint = (price: number, fullRedraw = false) => {
+      const live    = liveRef.current
+      const session = sessionRef.current
+      const vol     = volRef.current
+      const chart   = chartRef.current
+      const buf     = bufferRef.current
+      if (!live || !session || !vol || !chart || !buf.length) return
 
+      const last = buf[buf.length - 1]
+      last.price = price
+      displayPriceRef.current = price
+      applyLineColor(price)
+
+      if (fullRedraw) {
+        live.setData(buf.map((e) => ({ time: e.time as Time, value: e.price })))
+        const sessionData = buf.filter((e) => e.sessionAvg != null)
+          .map((e) => ({ time: e.time as Time, value: e.sessionAvg! }))
+        if (sessionData.length > 0) session.setData(sessionData)
+        vol.setData(buf.map((e) => ({
+          time:  e.time as Time,
+          value: e.volume,
+          color: e.volume > 0
+            ? (e.buyVol / e.volume >= 0.5 ? 'rgba(34,197,94,0.45)' : 'rgba(239,68,68,0.45)')
+            : 'rgba(107,122,153,0.15)',
+        })))
+      } else {
+        live.update({ time: last.time as Time, value: price })
+      }
+
+      updateBadge(price)
+      syncViewport()
+    }
+
+    const stopAnimation = () => {
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
+      animRef.current = null
+    }
+
+    const animateToPrice = (target: number) => {
+      const from = displayPriceRef.current ?? target
+      if (Math.abs(from - target) < 0.005) {
+        stopAnimation()
+        paintLivePoint(target)
+        return
+      }
+
+      animRef.current = { from, to: target, start: performance.now() }
+
+      const tick = (now: number) => {
+        const anim = animRef.current
+        if (!anim) return
+        const t = Math.min(1, (now - anim.start) / PRICE_ANIM_MS)
+        const price = anim.from + (anim.to - anim.from) * easeOutCubic(t)
+        paintLivePoint(price)
+
+        if (t < 1) {
+          rafRef.current = requestAnimationFrame(tick)
+        } else {
+          paintLivePoint(anim.to)
+          stopAnimation()
+        }
+      }
+
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+      rafRef.current = requestAnimationFrame(tick)
+    }
+
+    const upsertBuffer = (price: number, sessionAvg?: number) => {
+      const nowSec = Math.floor(Date.now() / 1000)
+      const acc    = volAccRef.current
+      const volume = acc ? acc.buy + acc.sell : 0
+      const buyVol = acc ? acc.buy : 0
+      const buf    = bufferRef.current
+      const last   = buf[buf.length - 1]
+      const isNewSecond = !last || last.time !== nowSec
+
+      if (last && last.time === nowSec) {
+        last.sessionAvg = sessionAvg ?? last.sessionAvg
+        last.volume = volume
+        last.buyVol = buyVol
+      } else {
+        buf.push({
+          price,
+          sessionAvg: sessionAvg ?? null,
+          volume,
+          buyVol,
+          time: nowSec,
+        })
+        if (buf.length > MAX_POINTS) buf.shift()
+      }
+
+      return isNewSecond
+    }
+
+    const refreshVolumeSeries = () => {
+      const vol = volRef.current
+      const session = sessionRef.current
+      const buf = bufferRef.current
+      if (!vol || !session) return
       vol.setData(buf.map((e) => ({
         time:  e.time as Time,
         value: e.volume,
@@ -310,30 +405,45 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
           ? (e.buyVol / e.volume >= 0.5 ? 'rgba(34,197,94,0.45)' : 'rgba(239,68,68,0.45)')
           : 'rgba(107,122,153,0.15)',
       })))
+      const sessionData = buf.filter((e) => e.sessionAvg != null)
+        .map((e) => ({ time: e.time as Time, value: e.sessionAvg! }))
+      if (sessionData.length > 0) session.setData(sessionData)
+    }
 
-      // ── Viewport: always fill left-to-right, anchored at right edge ────────
-      if (isLiveRef.current) {
-        const lastIdx = buf.length - 1
-        chart.timeScale().setVisibleLogicalRange({
-          from: Math.max(0, lastIdx - VISIBLE_BARS + 1),
-          to:   lastIdx + 8,   // 8 bars of right margin (TradingView-style)
-        })
-      } else if (savedRange) {
-        chart.timeScale().setVisibleLogicalRange(savedRange)
-      }
+    return {
+    pushTrade(volume: number, side: 'buy' | 'sell' | 'unknown') {
+      const nowSec = Math.floor(Date.now() / 1000)
+      if (!volAccRef.current || volAccRef.current.time !== nowSec)
+        volAccRef.current = { time: nowSec, buy: 0, sell: 0 }
+      const acc = volAccRef.current
+      if (side === 'buy')       acc.buy  += volume
+      else if (side === 'sell') acc.sell += volume
+      else                      { acc.buy += volume / 2; acc.sell += volume / 2 }
+      refreshVolumeSeries()
+    },
 
-      // Badge
-      if (badgeRef.current && prices.length > 1) {
-        const delta = first > 0 ? ((price - first) / first) * 100 : 0
-        const sign  = delta >= 0 ? '+' : ''
-        badgeRef.current.textContent = `${sign}${delta.toFixed(3)}%`
-        badgeRef.current.style.color = isUp ? '#22c55e' : '#ef4444'
+    push(price: number, sessionAvg?: number) {
+      const prevDisplay = displayPriceRef.current
+      const isNewSecond = upsertBuffer(price, sessionAvg)
+
+      if (isNewSecond) {
+        const startPrice = prevDisplay ?? price
+        const last = bufferRef.current[bufferRef.current.length - 1]
+        if (last) last.price = startPrice
+        stopAnimation()
+        paintLivePoint(startPrice, true)
+        animateToPrice(price)
+      } else {
+        refreshVolumeSeries()
+        animateToPrice(price)
       }
     },
 
     reset() {
+      stopAnimation()
       bufferRef.current    = []
       volAccRef.current    = null
+      displayPriceRef.current = null
       lineColorRef.current = '#22c55e'
       liveRef.current?.setData([])
       sessionRef.current?.setData([])
@@ -344,7 +454,8 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       if (badgeRef.current) badgeRef.current.textContent = ''
       if (legendRef.current) legendRef.current.style.opacity = '0'
     },
-  }))
+  }
+  })
 
   const handleFit = () => chartRef.current?.timeScale().fitContent()
 
