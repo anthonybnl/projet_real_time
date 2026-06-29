@@ -1,9 +1,3 @@
-version: "3.8"
-
-networks:
-  kafka-net:
-    driver: bridge
-
 services:
   kafka:
     image: confluentinc/cp-kafka:7.8.0
@@ -53,17 +47,14 @@ services:
   mongo:
     image: mongo:7.0.34
     container_name: rt_mongo
-    # Replica set rs0 is required for MongoDB change streams (live WebSocket mode).
-    entrypoint: >
-      bash -c "
-      if [ ! -f /data/db/.keyfile ]; then
-        openssl rand -base64 756 > /data/db/.keyfile;
-      fi &&
-      cp /data/db/.keyfile /etc/mongo.key &&
-      chmod 400 /etc/mongo.key &&
-      chown 999:999 /etc/mongo.key &&
-      exec docker-entrypoint.sh mongod --replSet rs0 --bind_ip_all --keyFile /etc/mongo.key
-      "
+    entrypoint:
+      - bash
+      - -c
+      - |
+        cp /tmp/mongo-keyfile /data/configdb/keyfile
+        chmod 400 /data/configdb/keyfile
+        chown mongodb:mongodb /data/configdb/keyfile
+        exec docker-entrypoint.sh mongod --replSet rs0 --keyFile /data/configdb/keyfile --bind_ip_all   
     ports:
       - "27018:27017"
     environment:
@@ -71,12 +62,8 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: example
     volumes:
       - mongo_data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "-u", "root", "-p", "example", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping')", "--quiet"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
+      - ./mongo-keyfile:/tmp/mongo-keyfile:ro
+
     networks:
       - kafka-net
 
@@ -103,15 +90,10 @@ services:
     container_name: crypto-api
     ports:
       - "8000:8000"
-    environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
-      MONGODB_URI: mongodb://root:example@mongo:27017/?authSource=admin&replicaSet=rs0
-      USE_MOCK: "false"
+    env_file:
+      - docker.env
     depends_on:
-      mongo-init-replica:
-        condition: service_completed_successfully
-      kafka:
-        condition: service_started
+      - mongo
     networks:
       - kafka-net
     restart: unless-stopped
@@ -136,3 +118,7 @@ services:
 volumes:
   kafka_data:
   mongo_data:
+
+networks:
+  kafka-net:
+    driver: bridge

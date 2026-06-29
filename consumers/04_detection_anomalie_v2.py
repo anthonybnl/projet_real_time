@@ -19,6 +19,7 @@ sauvegardees dans MongoDB.
 """
 
 import json
+import os
 import time
 import math
 import logging
@@ -26,13 +27,14 @@ import sys
 import argparse
 from collections import deque
 from datetime import datetime, timezone
+from dotenv import load_dotenv
 import numpy as np
 from pymongo import MongoClient
 from kafka import KafkaConsumer, KafkaProducer, KafkaAdminClient
 from kafka.admin import NewTopic
 from kafka.errors import KafkaError, TopicAlreadyExistsError
 
-
+load_dotenv()
 # Kafka
 BOOTSTRAP_SERVERS = "127.0.0.1:9092"
 INPUT_TOPIC = "btc.cleaned"
@@ -40,12 +42,12 @@ ALERT_TOPIC = "financial.alerts"
 GROUP_ID = "financial-anomaly-detector-v2-group"
 
 # MongoDB
-MONGO_URI = "mongodb://root:example@localhost:27018/"
-MONGO_DB = "crypto_realtime"
+MONGO_URI = os.environ["MONGODB_URI"]
+MONGO_DB = os.environ["MONGODB_DBNAME"]
 MONGO_COLLECTION = "btc_anomalies"
 
 # Sensibilite : low = peu d'alertes mais fiables, high = plus d'alertes, plus de bruit
-SENSITIVITY = "low"
+SENSITIVITY = os.environ["ANOMALY_SENSITIVITY"]
 SENSITIVITY_MAP = {
     "low":    {"z_pct": 99.5, "spread_pct": 99, "ofi_thresh": 0.92, "combo_required": 3, "combo_window": 60},
     "medium": {"z_pct": 99,   "spread_pct": 97, "ofi_thresh": 0.85, "combo_required": 2, "combo_window": 45},

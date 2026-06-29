@@ -50,9 +50,8 @@ from store import WINDOWS
 
 
 
-MONGO_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-
-DB_NAME = "crypto_realtime"
+MONGO_URI = os.environ['MONGODB_URI']
+DB_NAME = os.environ["MONGODB_DBNAME"]
 
 
 

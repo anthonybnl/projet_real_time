@@ -14,12 +14,7 @@ from store import store, WINDOWS
 
 router = APIRouter()
 
-USE_MOCK = os.getenv("USE_MOCK", "true").lower() == "true"
-
-
 async def _tracked_symbols() -> list[str]:
-    if USE_MOCK:
-        return store.symbols()
     from db import get_tracked_symbols
     return await get_tracked_symbols()
 
@@ -29,9 +24,6 @@ async def get_trades(
     symbol: str | None = Query(None, description="Filter by symbol, e.g. BTCUSDT"),
     limit: int = Query(50, ge=1, le=500),
 ):
-    if USE_MOCK:
-        return {"symbol": symbol, "trades": store.get_recent_trades(symbol=symbol, limit=limit)}
-
     from db import get_recent_trades
     return {"symbol": symbol, "trades": await get_recent_trades(symbol=symbol, limit=limit)}
 
@@ -41,12 +33,6 @@ async def get_stats(
     symbol: str | None = Query(None, description="Filter by symbol"),
     window: int = Query(60, description="Time window in seconds", ge=1),
 ):
-    if USE_MOCK:
-        closest = min(WINDOWS, key=lambda w: abs(w - window))
-        if symbol:
-            return store.get_stats(symbol=symbol, window=closest)
-        return {"windows": WINDOWS, "stats": store.get_all_stats()}
-
     from db import get_stats as db_get_stats
     closest = min(WINDOWS, key=lambda w: abs(w - window))
     sym = symbol or "BTC-USD"
