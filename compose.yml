@@ -52,7 +52,7 @@ services:
 
   mongo:
     image: mongo:7.0.34
-    container_name: mongo
+    container_name: rt_mongo
     # Replica set rs0 is required for MongoDB change streams (live WebSocket mode).
     entrypoint: >
       bash -c "
@@ -65,7 +65,7 @@ services:
       exec docker-entrypoint.sh mongod --replSet rs0 --bind_ip_all --keyFile /etc/mongo.key
       "
     ports:
-      - "27017:27017"
+      - "27018:27017"
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: example
@@ -79,40 +79,6 @@ services:
       start_period: 20s
     networks:
       - kafka-net
-
-  mongo-init-replica:
-    image: mongo:7.0.34
-    container_name: mongo-init-replica
-    depends_on:
-      mongo:
-        condition: service_healthy
-    networks:
-      - kafka-net
-    entrypoint: ["/bin/bash", "-c"]
-    command:
-      - |
-        for i in $(seq 1 30); do
-          if mongosh --host mongo:27017 --username root --password example --authenticationDatabase admin --quiet --eval "
-            try {
-              const s = rs.status();
-              if (s.ok) quit(0);
-            } catch (e) {
-              if (e.codeName === 'NotYetInitialized') {
-                rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]});
-                quit(0);
-              }
-              throw e;
-            }
-          "; then
-            echo "Replica set ready"
-            exit 0
-          fi
-          echo "Waiting for MongoDB... attempt $$i/30"
-          sleep 2
-        done
-        echo "Failed to initialize replica set"
-        exit 1
-    restart: "no"
 
   mongo-express:
     image: mongo-express:1.0.2

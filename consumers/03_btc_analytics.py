@@ -9,13 +9,14 @@ from datetime import datetime, timedelta, timezone
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 from pymongo import MongoClient
+import os
 
 BOOTSTRAP_SERVERS = "localhost:9092"
 INPUT_TOPIC = "btc.cleaned"
 GROUP_ID = "btc-analytics-group"
 
-MONGO_URI = "mongodb://root:example@localhost:27017/?directConnection=true"
-MONGO_DB = "crypto_realtime"
+MONGO_URI = os.environ["MONGODB_URI"]
+MONGO_DB = os.environ["MONGODB_DB"]
 MONGO_COLLECTION = "btc_analytics"
 
 

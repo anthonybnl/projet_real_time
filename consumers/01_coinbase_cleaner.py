@@ -91,7 +91,7 @@ def handle_message(data, producer: KafkaProducer):
         print(f"Erreur parsing message: {e}")
         cleaned = None
 
-    if cleaned:
+    if cleaned and cleaned["id"] is not None and cleaned["price"] > 0:
         producer.send(OUTPUT_TOPIC, key=f"btc-{cleaned['id']}", value=cleaned)
 
 
