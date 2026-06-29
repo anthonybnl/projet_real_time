@@ -36,11 +36,37 @@ export interface WindowStats {
 
 export type SnapshotData = Record<string, Record<string, WindowStats>>
 
+export interface AnalyticsData {
+  timestamp: string
+  symbol: string
+  window_1sec: {
+    avg_price?: number
+    trades_per_second?: number
+  }
+  window_5min: {
+    avg_price?: number
+    volume?: number
+    trades_count?: number
+  }
+  global?: {
+    avg_price_since_start?: number
+    total_trades?: number
+    uptime_seconds?: number
+  }
+  recent_trades?: Trade[]
+  window_60s_extra?: {
+    high?: number
+    low?: number
+    count?: number
+    total_notional?: number
+  }
+}
+
 export type WSMessage =
   | { type: 'trade'; data: Trade }
   | { type: 'alert'; data: AlertData }
   | { type: 'snapshot'; data: SnapshotData }
-  | { type: 'analytics'; data: unknown }
+  | { type: 'analytics'; data: AnalyticsData }
 
 export interface SymbolConfig {
   label: string

@@ -16,7 +16,7 @@ INPUT_TOPIC = "btc.cleaned"
 GROUP_ID = "btc-mongo-consumer-group"
 
 # Configuration MongoDB
-MONGO_URI = "mongodb://root:example@localhost:27017/"
+MONGO_URI = "mongodb://root:example@localhost:27017/?directConnection=true"
 MONGO_DB = "crypto_realtime"
 MONGO_COLLECTION = "btc_trades"
 

@@ -1,5 +1,5 @@
 'use client'
-import { useReducer, useCallback, useRef, useEffect } from 'react'
+import { useReducer, useCallback, useRef, useEffect, useState } from 'react'
 import gsap from 'gsap'
 
 import TopBar from './TopBar'
@@ -56,9 +56,19 @@ function reducer(state: State, action: Action): State {
 
     case 'TRADE': {
       if (action.trade.symbol !== state.symbol) return state
+      const prevPrice = state.stats60.last_price
+      const newPrice = action.trade.price
+      const pct = prevPrice && newPrice
+        ? ((newPrice - prevPrice) / prevPrice) * 100
+        : state.priceChangePct
       return {
         ...state,
         trades: [action.trade, ...state.trades].slice(0, MAX_TRADES),
+        priceChangePct: pct,
+        stats60: {
+          ...state.stats60,
+          last_price: newPrice,
+        },
       }
     }
 
@@ -76,31 +86,27 @@ function reducer(state: State, action: Action): State {
     }
 
     case 'ANALYTICS': {
-      // Fired every ~1 second from mock loop and MongoDB change stream
       const a = action.analytics
       if (a.symbol !== state.symbol) return state
       const newPrice = a.window_1sec.avg_price
-      const prevPrice = state.stats60.last_price
-      const pct = prevPrice && newPrice ? ((newPrice - prevPrice) / prevPrice) * 100 : state.priceChangePct
+      const extra = a.window_60s_extra ?? {}
       return {
         ...state,
-        priceChangePct: pct,
-        // Refresh trades list from the 1-second snapshot so the table always stays current
         trades: a.recent_trades?.length ? a.recent_trades : state.trades,
-        // window_1sec → stats60 (the "live" 1-second bucket)
         stats60: {
           ...state.stats60,
           last_price: newPrice ?? state.stats60.last_price,
-          avg_price:  newPrice ?? state.stats60.avg_price,
-          // trades_per_second from the 1-sec window is not a count; keep existing
+          avg_price: newPrice ?? state.stats60.avg_price,
+          high: extra.high ?? state.stats60.high,
+          low: extra.low ?? state.stats60.low,
+          count: extra.count ?? state.stats60.count,
         },
-        // window_5min → stats300 (the 5-minute aggregation)
         stats300: {
           ...state.stats300,
-          avg_price:    a.window_5min.avg_price    ?? state.stats300.avg_price,
-          vwap:         a.window_5min.avg_price    ?? state.stats300.vwap,
-          total_volume: a.window_5min.volume       ?? state.stats300.total_volume,
-          count:        a.window_5min.trades_count ?? state.stats300.count,
+          avg_price: a.window_5min.avg_price ?? state.stats300.avg_price,
+          vwap: a.window_5min.avg_price ?? state.stats300.vwap,
+          total_volume: a.window_5min.volume ?? state.stats300.total_volume,
+          count: a.window_5min.trades_count ?? state.stats300.count,
         },
       }
     }
@@ -134,6 +140,7 @@ const initialState: State = {
 // ---------------------------------------------------------------------------
 export default function Dashboard() {
   const [state, dispatch] = useReducer(reducer, initialState)
+  const [apiMode, setApiMode] = useState<'mock' | 'mongodb' | null>(null)
   const priceChartRef  = useRef<PriceChartHandle>(null)
   const volChartRef    = useRef<VolumeChartHandle>(null)
   const globalChartRef = useRef<GlobalChartHandle>(null)
@@ -151,17 +158,24 @@ export default function Dashboard() {
         if (trade.symbol === symbolRef.current) {
           volChartRef.current?.push(trade.volume, trade.timestamp, trade.side)
           priceChartRef.current?.pushTrade(trade.volume, trade.side ?? 'unknown')
+          priceChartRef.current?.push(trade.price)
         }
         break
       }
       case 'alert':
         dispatch({ type: 'ALERT', alert: msg.data as AlertData })
         break
-      case 'snapshot':
-        dispatch({ type: 'SNAPSHOT', data: msg.data as SnapshotData })
+      case 'snapshot': {
+        const data = msg.data as SnapshotData
+        dispatch({ type: 'SNAPSHOT', data })
+        const sym = symbolRef.current
+        const snap60 = data[sym]?.['60']
+        if (snap60?.last_price) {
+          priceChartRef.current?.push(snap60.last_price)
+        }
         break
+      }
       case 'analytics': {
-        // 1-second MongoDB update (production mode)
         const analytics = msg.data as AnalyticsData
         dispatch({ type: 'ANALYTICS', analytics })
         if (analytics.symbol === symbolRef.current) {
@@ -181,6 +195,13 @@ export default function Dashboard() {
 
   useWebSocket(handleMessage, handleStatus)
 
+  useEffect(() => {
+    fetch(`${API_BASE}/api/health`)
+      .then((r) => r.json())
+      .then((h) => setApiMode(h.mode === 'mongodb' ? 'mongodb' : 'mock'))
+      .catch(() => setApiMode(null))
+  }, [])
+
   // Fetch initial REST data on mount
   useEffect(() => {
     fetchSymbolData(state.symbol)
@@ -197,12 +218,19 @@ export default function Dashboard() {
       dispatch({ type: 'LOAD_STATS', stats60: s60, stats300: s300 })
       dispatch({ type: 'LOAD_TRADES', trades: tradesRes.trades ?? [] })
       dispatch({ type: 'LOAD_ALERTS', alerts: alertsRes.alerts ?? [] })
+      if (s60.last_price) priceChartRef.current?.push(s60.last_price)
     } catch { /* backend not yet ready */ }
   }
+
+  const isSymbolLive = useCallback(
+    (key: string) => apiMode !== 'mongodb' || key === 'BTC-USD',
+    [apiMode],
+  )
 
   // Symbol tab switch with GSAP fade
   const handleSymbolChange = useCallback(async (symbol: string) => {
     if (symbol === symbolRef.current) return
+    if (!isSymbolLive(symbol)) return
 
     await gsap.to(contentRef.current, { opacity: 0.3, duration: 0.15 }).then()
 
@@ -213,7 +241,7 @@ export default function Dashboard() {
     await fetchSymbolData(symbol)
 
     gsap.to(contentRef.current, { opacity: 1, duration: 0.25 })
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isSymbolLive]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Derived values for stat cards
   const exchange = SYMBOLS.find((s) => s.key === state.symbol)?.exchange ?? ''
@@ -228,6 +256,7 @@ export default function Dashboard() {
         connected={state.connected}
         exchange={exchange}
         onSymbolChange={handleSymbolChange}
+        isSymbolLive={isSymbolLive}
       />
 
       <div ref={contentRef} className="flex-1 p-4 flex flex-col gap-3">

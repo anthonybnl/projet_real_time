@@ -53,6 +53,17 @@ services:
   mongo:
     image: mongo:7.0.34
     container_name: mongo
+    # Replica set rs0 is required for MongoDB change streams (live WebSocket mode).
+    entrypoint: >
+      bash -c "
+      if [ ! -f /data/db/.keyfile ]; then
+        openssl rand -base64 756 > /data/db/.keyfile;
+      fi &&
+      cp /data/db/.keyfile /etc/mongo.key &&
+      chmod 400 /etc/mongo.key &&
+      chown 999:999 /etc/mongo.key &&
+      exec docker-entrypoint.sh mongod --replSet rs0 --bind_ip_all --keyFile /etc/mongo.key
+      "
     ports:
       - "27017:27017"
     environment:
@@ -60,8 +71,48 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: example
     volumes:
       - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "-u", "root", "-p", "example", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping')", "--quiet"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
     networks:
       - kafka-net
+
+  mongo-init-replica:
+    image: mongo:7.0.34
+    container_name: mongo-init-replica
+    depends_on:
+      mongo:
+        condition: service_healthy
+    networks:
+      - kafka-net
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        for i in $(seq 1 30); do
+          if mongosh --host mongo:27017 --username root --password example --authenticationDatabase admin --quiet --eval "
+            try {
+              const s = rs.status();
+              if (s.ok) quit(0);
+            } catch (e) {
+              if (e.codeName === 'NotYetInitialized') {
+                rs.initiate({_id:'rs0',members:[{_id:0,host:'mongo:27017'}]});
+                quit(0);
+              }
+              throw e;
+            }
+          "; then
+            echo "Replica set ready"
+            exit 0
+          fi
+          echo "Waiting for MongoDB... attempt $$i/30"
+          sleep 2
+        done
+        echo "Failed to initialize replica set"
+        exit 1
+    restart: "no"
 
   mongo-express:
     image: mongo-express:1.0.2
@@ -88,11 +139,13 @@ services:
       - "8000:8000"
     environment:
       KAFKA_BOOTSTRAP_SERVERS: kafka:19092
-      MONGODB_URI: mongodb://mongo:27017
-      USE_MOCK: "true"
+      MONGODB_URI: mongodb://root:example@mongo:27017/?authSource=admin&replicaSet=rs0
+      USE_MOCK: "false"
     depends_on:
-      - kafka
-      - mongo
+      mongo-init-replica:
+        condition: service_completed_successfully
+      kafka:
+        condition: service_started
     networks:
       - kafka-net
     restart: unless-stopped

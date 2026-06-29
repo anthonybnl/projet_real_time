@@ -10,6 +10,7 @@ interface TopBarProps {
   connected: boolean
   exchange: string
   onSymbolChange: (symbol: string) => void
+  isSymbolLive?: (key: string) => boolean
 }
 
 function SunIcon() {
@@ -36,7 +37,7 @@ function MoonIcon() {
   )
 }
 
-export default function TopBar({ activeSymbol, connected, exchange, onSymbolChange }: TopBarProps) {
+export default function TopBar({ activeSymbol, connected, exchange, onSymbolChange, isSymbolLive }: TopBarProps) {
   const { theme, toggle } = useTheme()
   const dotRef    = useRef<HTMLSpanElement>(null)
   const iconRef   = useRef<HTMLSpanElement>(null)
@@ -84,19 +85,26 @@ export default function TopBar({ activeSymbol, connected, exchange, onSymbolChan
         </span>
 
         <div className="flex gap-1">
-          {SYMBOLS.map((s: SymbolConfig) => (
+          {SYMBOLS.map((s: SymbolConfig) => {
+            const live = isSymbolLive ? isSymbolLive(s.key) : true
+            return (
             <button
               key={s.key}
-              onClick={() => onSymbolChange(s.key)}
+              onClick={() => live && onSymbolChange(s.key)}
+              disabled={!live}
+              title={live ? s.label : `${s.label} — not available in live mode`}
               className={`px-3 py-1 rounded-md text-xs font-medium transition-all duration-150 ${
                 activeSymbol === s.key
                   ? 'bg-crypto-accent text-white'
-                  : 'bg-transparent text-crypto-dim border border-crypto-border hover:border-crypto-accent hover:text-crypto-text'
+                  : live
+                    ? 'bg-transparent text-crypto-dim border border-crypto-border hover:border-crypto-accent hover:text-crypto-text'
+                    : 'bg-transparent text-crypto-dim/40 border border-crypto-border/40 cursor-not-allowed opacity-50'
               }`}
             >
               {s.label}
             </button>
-          ))}
+            )
+          })}
         </div>
       </div>
 

@@ -27,7 +27,7 @@ function StatCard({ label, value, format, sub, subUp, icon }: StatCardProps) {
     tweenObj.current.n = from
     gsap.to(tweenObj.current, {
       n: value,
-      duration: 0.4,
+      duration: 0.55,
       ease: 'power2.out',
       overwrite: true,
       onUpdate() {
