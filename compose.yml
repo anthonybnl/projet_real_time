@@ -103,10 +103,8 @@ services:
     container_name: crypto-api
     ports:
       - "8000:8000"
-    environment:
-      KAFKA_BOOTSTRAP_SERVERS: kafka:19092
-      MONGODB_URI: mongodb://root:example@mongo:27017/?authSource=admin&replicaSet=rs0
-      USE_MOCK: "false"
+    env_file:
+      - docker.env
     depends_on:
       mongo-init-replica:
         condition: service_completed_successfully

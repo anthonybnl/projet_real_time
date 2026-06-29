@@ -4,12 +4,15 @@ Lit depuis btc.cleaned et insere en lot dans MongoDB toutes les 1s
 """
 
 import json
+import os
 import time
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 from pymongo import MongoClient, ASCENDING
 from pymongo.errors import PyMongoError
-import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configuration Kafka
 BOOTSTRAP_SERVERS = "localhost:9092"
@@ -18,7 +21,7 @@ GROUP_ID = "btc-mongo-consumer-group"
 
 # Configuration MongoDB
 MONGO_URI = os.environ["MONGODB_URI"]
-MONGO_DB = os.environ["MONGODB_DB"]
+MONGO_DB = os.environ["MONGODB_DBNAME"]
 MONGO_COLLECTION = "btc_trades"
 
 # Configuration du buffer
