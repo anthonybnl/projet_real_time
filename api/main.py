@@ -28,11 +28,11 @@ log = logging.getLogger(__name__)
 # Ingestion loop
 # ---------------------------------------------------------------------------
 
-async def _mongo_trades_loop() -> None:
-    from db import trades_change_stream
-    log.info("Ingestion mode: MONGODB trades change stream")
-    async for trade in trades_change_stream():
-        await manager.broadcast({"type": "trade", "data": trade})
+async def _mongo_analytics_loop() -> None:
+    from db import analytics_stream
+    log.info("Ingestion mode: MONGODB analytics stream (throttled aggregation)")
+    async for analytics in analytics_stream():
+        await manager.broadcast({"type": "analytics", "data": analytics})
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +42,7 @@ async def _mongo_trades_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tasks = [
-        asyncio.create_task(_mongo_trades_loop()),
+        asyncio.create_task(_mongo_analytics_loop()),
     ]
     yield
     for task in tasks:
