@@ -22,6 +22,8 @@ interface Entry {
   time:   number         // Unix seconds
 }
 
+type ChartMode = 'line' | 'candles'
+
 const TC = {
   dark: {
     text: '#6b7a99', grid: 'rgba(26,37,64,0.55)', border: '#1a2540',
@@ -57,8 +59,10 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef     = useRef<IChartApi | null>(null)
   const liveRef      = useRef<ISeriesApi<'Area'> | null>(null)
+  const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const sessionRef   = useRef<ISeriesApi<'Line'> | null>(null)
   const volRef       = useRef<ISeriesApi<'Histogram'> | null>(null)
+  const chartModeRef = useRef<ChartMode>('line')
   const bufferRef    = useRef<Entry[]>([])
   const lineColorRef = useRef('#22c55e')
   const isLiveRef    = useRef(true)
@@ -68,6 +72,7 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
   const legendRef = useRef<HTMLDivElement>(null)
   const badgeRef     = useRef<HTMLSpanElement>(null)
   const [isLive, setIsLive] = useState(true)
+  const [chartMode, setChartMode] = useState<ChartMode>('line')
 
   useEffect(() => { themeRef.current = theme }, [theme])
 
@@ -129,6 +134,17 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
     })
 
+    // ── Candlesticks (hidden until toggled) ─────────────────────────────────
+    const candleSeries = chart.addCandlestickSeries({
+      upColor:        '#22c55e',
+      downColor:      '#ef4444',
+      borderVisible:  false,
+      wickUpColor:    '#22c55e',
+      wickDownColor:  '#ef4444',
+      visible:        false,
+      priceFormat:    { type: 'price', precision: 2, minMove: 0.01 },
+    })
+
     // ── Line: session avg ───────────────────────────────────────────────────
     const sessionSeries = chart.addLineSeries({
       color:     '#8b5cf6',
@@ -155,8 +171,11 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
 
     chartRef.current   = chart
     liveRef.current    = liveSeries
+    candleRef.current  = candleSeries
     sessionRef.current = sessionSeries
     volRef.current     = volSeries
+
+    const entryClose = (e: Entry) => e.close
 
     // ── TradingView-style fixed legend (top-left) ───────────────────────────
     chart.subscribeCrosshairMove((param) => {
@@ -166,16 +185,27 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
         legend.style.opacity = '0'
         return
       }
-      const lp = param.seriesData.get(liveSeries)    as { value: number } | undefined
-      const sp = param.seriesData.get(sessionSeries) as { value: number } | undefined
-      const vp = param.seriesData.get(volSeries)     as { value: number } | undefined
-      if (!lp) { legend.style.opacity = '0'; return }
+
+      const mode = chartModeRef.current
+      const lp = mode === 'line'
+        ? param.seriesData.get(liveSeries) as { value: number } | undefined
+        : undefined
+      const cp = mode === 'candles'
+        ? param.seriesData.get(candleSeries) as { open: number; high: number; low: number; close: number } | undefined
+        : undefined
+      const sp = mode === 'line'
+        ? param.seriesData.get(sessionSeries) as { value: number } | undefined
+        : undefined
+      const vp = param.seriesData.get(volSeries) as { value: number } | undefined
+
+      const refPrice = lp?.value ?? cp?.close
+      if (refPrice == null) { legend.style.opacity = '0'; return }
 
       const prices = bufferRef.current.map((e) => e.price)
       const first  = prices[0] ?? lp.value
       const delta  = first > 0 ? ((lp.value - first) / first) * 100 : 0
       const sign   = delta >= 0 ? '+' : ''
-      const lc     = lineColorRef.current
+      const lc     = refPrice >= (cp?.open ?? refPrice) ? '#22c55e' : '#ef4444'
       const curTc  = TC[themeRef.current].tooltip
 
       const t    = new Date((param.time as number) * 1000)
@@ -183,14 +213,17 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
                    t.getMinutes().toString().padStart(2, '0') + ':' +
                    t.getSeconds().toString().padStart(2, '0')
 
-      // Update legend content — position is fixed top-left, no cursor-following
+      const priceBlock = mode === 'candles' && cp
+        ? `<span style="color:${curTc.text};font-size:11px;font-weight:600">O ${fmt$(cp.open)} H ${fmt$(cp.high)} L ${fmt$(cp.low)} C ${fmt$(cp.close)}</span>`
+        : `<span style="color:${curTc.text};font-size:11px;font-weight:600">${fmt$(refPrice)}</span>`
+
       legend.style.background = curTc.bg
       legend.style.borderColor = curTc.border
       legend.innerHTML = `
         <span style="color:${curTc.dim};font-size:10px;margin-right:8px">${tStr}</span>
         <span style="display:inline-flex;align-items:center;gap:4px;margin-right:10px">
           <span style="width:9px;height:2px;background:${lc};display:inline-block;border-radius:1px"></span>
-          <span style="color:${curTc.text};font-size:11px;font-weight:600">${fmt$(lp.value)}</span>
+          ${priceBlock}
           <span style="color:${delta >= 0 ? '#22c55e' : '#ef4444'};font-size:10px">${sign}${delta.toFixed(3)}%</span>
         </span>
         ${sp ? `
@@ -228,7 +261,7 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       ro.disconnect()
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
       chart.remove()
-      chartRef.current = liveRef.current = sessionRef.current = volRef.current = null
+      chartRef.current = liveRef.current = candleRef.current = sessionRef.current = volRef.current = null
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -254,7 +287,7 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
     const applyLineColor = (price: number) => {
       const live = liveRef.current
       if (!live) return
-      const prices = bufferRef.current.map((e) => e.price)
+      const prices = bufferRef.current.map((e) => e.close)
       const first  = prices[0] ?? price
       const isUp   = price >= first
       const lc     = isUp ? '#22c55e' : '#ef4444'
@@ -267,8 +300,16 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       })
     }
 
+    const candlePoint = (e: Entry) => ({
+      time: e.time as Time,
+      open: e.open,
+      high: e.high,
+      low: e.low,
+      close: e.close,
+    })
+
     const updateBadge = (price: number) => {
-      const prices = bufferRef.current.map((e) => e.price)
+      const prices = bufferRef.current.map((e) => e.close)
       const first  = prices[0] ?? price
       if (badgeRef.current && prices.length > 1) {
         const delta = first > 0 ? ((price - first) / first) * 100 : 0
@@ -294,7 +335,9 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       if (!live || !chart || !buf.length) return
 
       const last = buf[buf.length - 1]
-      last.price = price
+      last.close = price
+      last.high = Math.max(last.high, price)
+      last.low = Math.min(last.low, price)
       displayPriceRef.current = price
       applyLineColor(price)
       live.update({ time: last.time as Time, value: price })
@@ -385,6 +428,7 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       displayPriceRef.current = null
       lineColorRef.current = '#22c55e'
       liveRef.current?.setData([])
+      candleRef.current?.setData([])
       sessionRef.current?.setData([])
       volRef.current?.setData([])
       liveRef.current?.applyOptions({
@@ -413,7 +457,9 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       {/* ── Header ── */}
       <div className="flex justify-between items-center mb-2">
         <div className="flex items-center gap-4">
-          <span className="text-xs font-medium text-crypto-text">Price — rolling 60s</span>
+          <span className="text-xs font-medium text-crypto-text">
+            {chartMode === 'line' ? 'Price — rolling 60s' : 'Bougies — 60s'}
+          </span>
           <span className="flex items-center gap-3 text-[10px]">
             <span className="flex items-center gap-1.5">
               <span style={{ width: 16, height: 0, borderBottom: '2px solid #22c55e', display: 'inline-block', verticalAlign: 'middle' }} />
@@ -433,6 +479,18 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
           <span ref={badgeRef} className="text-[11px] font-mono tabular-nums" />
           <span className="text-[11px] text-crypto-dim">{symbol}</span>
           <div className="flex items-center gap-1 ml-1">
+            <button
+              onClick={handleModeToggle}
+              className="px-2 py-0.5 rounded text-[10px] border transition-colors"
+              style={{
+                background:  chartMode === 'candles' ? 'rgba(245,158,11,0.12)' : tc.btn.bg,
+                borderColor: chartMode === 'candles' ? 'rgba(245,158,11,0.4)' : tc.btn.border,
+                color:       chartMode === 'candles' ? '#f59e0b' : tc.btn.text,
+              }}
+              title={chartMode === 'line' ? 'Passer aux bougies' : 'Passer au graphique en ligne'}
+            >
+              {chartMode === 'line' ? 'Bougies' : 'Ligne'}
+            </button>
             <button
               onClick={handleFit}
               className="px-2 py-0.5 rounded text-[10px] border transition-colors"

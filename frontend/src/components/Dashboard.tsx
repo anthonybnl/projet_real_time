@@ -6,12 +6,14 @@ import StatCard from './StatCard'
 import PriceChart, { type PriceChartHandle } from './PriceChart'
 import VolumeChart, { type VolumeChartHandle } from './VolumeChart'
 import GlobalChart, { type GlobalChartHandle } from './GlobalChart'
-import AlertsList from './AlertsList'
+import AnomaliesList from './AnomaliesList'
 import TradesTable from './TradesTable'
 import MarketOverview from './MarketOverview'
 import { useWebSocket } from '@/hooks/useWebSocket'
+
 import { LIVE_SYMBOL, LIVE_EXCHANGE } from '@/types'
-import type { Trade, AlertData, AnalyticsData, WSMessage } from '@/types'
+import type { Trade, AnalyticsData, WSMessage,  AnomalyData, WindowStats, SnapshotData } from '@/types'
+
 
 const API_BASE =
   typeof window !== 'undefined'
@@ -19,6 +21,7 @@ const API_BASE =
     : 'http://localhost:8000'
 
 const MAX_TRADES = 15
+const MAX_ANOMALIES = 10
 const HISTORY_SECONDS = 60  // fenetre glissante pour high/low/trades client-side (1 min)
 
 // ---------------------------------------------------------------------------
@@ -34,6 +37,7 @@ interface State {
   connected: boolean
   analytics: AnalyticsData | null
   trades: Trade[]
+  anomalies: AnomalyData[]
   priceChangePct: number
   market: MarketDerived
 }
@@ -42,11 +46,14 @@ type Action =
   | { type: 'CONNECTED'; value: boolean }
   | { type: 'ANALYTICS'; analytics: AnalyticsData; market: MarketDerived }
   | { type: 'LOAD_TRADES'; trades: Trade[] }
+  | { type: 'ANOMALY'; anomaly: AnomalyData }
+  | { type: 'LOAD_ANOMALIES'; anomalies: AnomalyData[] }
 
 const initialState: State = {
   connected: false,
   analytics: null,
   trades: [],
+  anomalies: [],
   priceChangePct: 0,
   market: {},
 }
@@ -74,6 +81,14 @@ function reducer(state: State, action: Action): State {
     case 'LOAD_TRADES':
       return { ...state, trades: action.trades }
 
+    case 'ANOMALY': {
+      // if (action.anomaly.symbol !== state.symbol) return state
+      return { ...state, anomalies: [action.anomaly, ...state.anomalies].slice(0, MAX_ANOMALIES) }
+    }
+
+    case 'LOAD_ANOMALIES':
+      return { ...state, anomalies: action.anomalies }
+
     default:
       return state
   }
@@ -91,7 +106,15 @@ export default function Dashboard() {
   const historyRef = useRef<{ time: number; price: number; trades: number }[]>([])
 
   const handleMessage = useCallback((msg: WSMessage) => {
-    if (msg.type !== 'analytics') return
+    if (msg.type === 'anomaly'){
+      const anomaly = msg.data as AnomalyData
+      dispatch({ type: 'ANOMALY', anomaly })
+      return
+    }
+    else if (msg.type !== 'analytics') return
+
+
+
     const a = msg.data
     const now = Date.now() / 1000
 
@@ -145,13 +168,17 @@ export default function Dashboard() {
       .then((r) => r.json())
       .then((res) => dispatch({ type: 'LOAD_TRADES', trades: res.trades ?? [] }))
       .catch(() => { /* backend pas encore pret */ })
+    
+    fetch(`${API_BASE}/api/anomalies?symbol=${'BTC-USD'}&limit=10`)
+      .then((r) => r.json())
+      .then((res) => dispatch({ type: 'LOAD_ANOMALIES', anomalies: res.anomalies ?? [] }))
+      .catch(() => { /* backend pas encore pret */ })
   }, [])
 
   // Valeurs derivees
   const a = state.analytics
   const lastPrice = a?.window_1sec.avg_price ?? undefined
   const priceUp = state.priceChangePct > 0 ? true : state.priceChangePct < 0 ? false : null
-  const noAlerts: AlertData[] = []
 
   // Stats pour MarketOverview (high/low/trades = client-side ; vwap/notional approximes)
   const stats60 = { high: state.market.high, low: state.market.low, count: state.market.trades1m }
@@ -215,7 +242,7 @@ export default function Dashboard() {
 
         {/* Bottom row */}
         <div className="grid grid-cols-3 gap-3">
-          <AlertsList alerts={noAlerts} />
+          <AnomaliesList anomalies={state.anomalies} />
           <TradesTable trades={state.trades} />
           <MarketOverview stats60={stats60} stats300={stats300} trades={state.trades} />
         </div>

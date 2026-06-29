@@ -8,17 +8,22 @@ export interface Trade {
   timestamp: number
 }
 
-export interface AlertData {
-  type: 'large_trade' | 'price_spike' | 'volume_spike'
-  symbol: string
-  price?: number
-  volume?: number
-  notional?: number
-  prev_price?: number
-  variation_pct?: number
-  mean_volume?: number
-  sigma?: number
+export type AnomalyType =
+  | 'SLIPPAGE_ANORMAL'
+  | 'SPREAD_ELASTIQUE'
+  | 'ORDER_FLOW_IMBALANCE'
+  | 'COMBINED_ANOMALY'
+  | 'DEPTH_EROSION'
+  | 'VPIN'
+  | 'WHALE_ALERT'
+
+export interface AnomalyData {
+  id?: string
+  anomaly_type: AnomalyType
   timestamp: number
+  exchange: string
+  symbol: string
+  details: Record<string, unknown> & { description?: string }
 }
 
 // Stats par fenetre, toujours partielles cote front (certains champs sont
@@ -53,6 +58,7 @@ export interface AnalyticsData {
 
 // Le backend ne pousse plus qu'un seul type de message (analytics, ~1/s).
 export type WSMessage = { type: 'analytics'; data: AnalyticsData }
+  | { type: 'anomaly'; data: AnomalyData }
 
 // Vue unique BTC : le backend agrege binance + coinbase ensemble.
 export const LIVE_SYMBOL = 'BTC'
