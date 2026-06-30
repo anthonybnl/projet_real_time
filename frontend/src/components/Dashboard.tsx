@@ -107,11 +107,13 @@ export default function Dashboard() {
     const a = msg.data
     const now = Date.now() / 1000
 
-    // --- Courbe de prix : prix 1s + MMA 1h + volume 1s ---
+    // --- Bougies 1s : close=prix 1s, high/low 1s (meches) + MMA 5 min + volume 1s ---
     const price  = a.window_1sec.avg_price
-    const ma1h   = a.window_1hour.avg_price
+    const high   = a.window_1sec.high ?? price
+    const low    = a.window_1sec.low ?? price
+    const ma5    = a.window_5min.avg_price
     const v1s    = a.window_1sec.volume
-    if (price != null) priceChartRef.current?.push(price, ma1h, v1s)
+    if (price != null) priceChartRef.current?.push(price, high, low, ma5, v1s)
 
     // --- Volume 1s : split buy/sell exact depuis l'agregat backend ---
     const buyV  = a.window_1sec.vol_buy

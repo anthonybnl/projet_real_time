@@ -12,12 +12,17 @@ import {
 import { useTheme } from '@/contexts/ThemeContext'
 
 const MAX_POINTS  = 120   // history kept in buffer (couleur/delta de reference)
-const PRICE_ANIM_MS = 450 // smooth transition duration for live price
 const TV_FONT = "'Trebuchet MS', Roboto, Ubuntu, sans-serif"
+const MA_COLOR = '#3b82f6'  // MMA 5 min (bleu plein)
+const UP_COLOR   = '#22c55e'
+const DOWN_COLOR = '#ef4444'
 
-interface Entry {
-  price:  number
-  ma:     number | null  // moyenne mobile 1h
+interface Candle {
+  open:   number
+  high:   number
+  low:    number
+  close:  number
+  ma:     number | null  // moyenne mobile 5 min
   volume: number
   time:   number         // Unix seconds
 }
@@ -38,13 +43,9 @@ const TC = {
 } as const
 
 export interface PriceChartHandle {
-  // Appele 1x/seconde : prix 1s, moyenne mobile 1h (ligne secondaire), volume 1s.
-  push(price: number, ma: number | null, volume: number): void
+  // Appele 1x/seconde : bougie 1s (prix=close, high/low 1s), MMA 5 min, volume 1s.
+  push(price: number, high: number, low: number, ma: number | null, volume: number): void
   reset(): void
-}
-
-function easeOutCubic(t: number) {
-  return 1 - Math.pow(1 - t, 3)
 }
 
 function fmt$(n: number) {
@@ -56,15 +57,11 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
   const themeRef     = useRef(theme)
   const containerRef = useRef<HTMLDivElement>(null)
   const chartRef     = useRef<IChartApi | null>(null)
-  const liveRef      = useRef<ISeriesApi<'Area'> | null>(null)
+  const candleRef    = useRef<ISeriesApi<'Candlestick'> | null>(null)
   const sessionRef   = useRef<ISeriesApi<'Line'> | null>(null)
   const volRef       = useRef<ISeriesApi<'Histogram'> | null>(null)
-  const bufferRef    = useRef<Entry[]>([])
-  const lineColorRef = useRef('#22c55e')
+  const bufferRef    = useRef<Candle[]>([])
   const isLiveRef    = useRef(true)
-  const displayPriceRef = useRef<number | null>(null)
-  const animRef = useRef<{ from: number; to: number; start: number } | null>(null)
-  const rafRef = useRef<number | null>(null)
   const legendRef = useRef<HTMLDivElement>(null)
   const badgeRef     = useRef<HTMLSpanElement>(null)
   const [isLive, setIsLive] = useState(true)
@@ -112,16 +109,14 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       handleScale:  { mouseWheel: true, axisPressedMouseMove: { time: true, price: true }, pinch: true },
     })
 
-    // ── Area: live price ────────────────────────────────────────────────────
-    const liveSeries = chart.addAreaSeries({
-      lineColor:   '#22c55e',
-      topColor:    'rgba(34,197,94,0.18)',
-      bottomColor: 'rgba(34,197,94,0)',
-      lineWidth:   2,
-      crosshairMarkerRadius:          5,
-      crosshairMarkerBorderColor:     '#080d1a',
-      crosshairMarkerBackgroundColor: '#22c55e',
-      crosshairMarkerBorderWidth:     2,
+    // ── Candlestick: prix (bougies 1s) ──────────────────────────────────────
+    const candleSeries = chart.addCandlestickSeries({
+      upColor:       UP_COLOR,
+      downColor:     DOWN_COLOR,
+      borderUpColor: UP_COLOR,
+      borderDownColor: DOWN_COLOR,
+      wickUpColor:   UP_COLOR,
+      wickDownColor: DOWN_COLOR,
       priceLineVisible:  true,
       priceLineStyle:    LineStyle.Dashed,
       priceLineColor:    'rgba(107,122,153,0.45)',
@@ -129,14 +124,14 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
     })
 
-    // ── Line: session avg ───────────────────────────────────────────────────
+    // ── Line: MMA 5 min (bleu plein) ────────────────────────────────────────
     const sessionSeries = chart.addLineSeries({
-      color:     '#8b5cf6',
-      lineWidth: 1,
-      lineStyle: LineStyle.Dashed,
+      color:     MA_COLOR,
+      lineWidth: 2,
+      lineStyle: LineStyle.Solid,
       crosshairMarkerVisible:          true,
       crosshairMarkerRadius:           3,
-      crosshairMarkerBackgroundColor:  '#8b5cf6',
+      crosshairMarkerBackgroundColor:  MA_COLOR,
       priceLineVisible:  false,
       lastValueVisible:  true,
       priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
@@ -154,7 +149,7 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
     })
 
     chartRef.current   = chart
-    liveRef.current    = liveSeries
+    candleRef.current  = candleSeries
     sessionRef.current = sessionSeries
     volRef.current     = volSeries
 
@@ -166,16 +161,16 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
         legend.style.opacity = '0'
         return
       }
-      const lp = param.seriesData.get(liveSeries)    as { value: number } | undefined
+      const lp = param.seriesData.get(candleSeries)  as { open: number; close: number } | undefined
       const sp = param.seriesData.get(sessionSeries) as { value: number } | undefined
       const vp = param.seriesData.get(volSeries)     as { value: number } | undefined
       if (!lp) { legend.style.opacity = '0'; return }
 
-      const prices = bufferRef.current.map((e) => e.price)
-      const first  = prices[0] ?? lp.value
-      const delta  = first > 0 ? ((lp.value - first) / first) * 100 : 0
+      const closes = bufferRef.current.map((e) => e.close)
+      const first  = closes[0] ?? lp.close
+      const delta  = first > 0 ? ((lp.close - first) / first) * 100 : 0
       const sign   = delta >= 0 ? '+' : ''
-      const lc     = lineColorRef.current
+      const lc     = lp.close >= lp.open ? UP_COLOR : DOWN_COLOR
       const curTc  = TC[themeRef.current].tooltip
 
       const t    = new Date((param.time as number) * 1000)
@@ -189,14 +184,14 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       legend.innerHTML = `
         <span style="color:${curTc.dim};font-size:10px;margin-right:8px">${tStr}</span>
         <span style="display:inline-flex;align-items:center;gap:4px;margin-right:10px">
-          <span style="width:9px;height:2px;background:${lc};display:inline-block;border-radius:1px"></span>
-          <span style="color:${curTc.text};font-size:11px;font-weight:600">${fmt$(lp.value)}</span>
-          <span style="color:${delta >= 0 ? '#22c55e' : '#ef4444'};font-size:10px">${sign}${delta.toFixed(3)}%</span>
+          <span style="width:9px;height:9px;background:${lc};display:inline-block;border-radius:2px"></span>
+          <span style="color:${curTc.text};font-size:11px;font-weight:600">${fmt$(lp.close)}</span>
+          <span style="color:${delta >= 0 ? UP_COLOR : DOWN_COLOR};font-size:10px">${sign}${delta.toFixed(3)}%</span>
         </span>
         ${sp ? `
         <span style="display:inline-flex;align-items:center;gap:4px;margin-right:10px">
-          <span style="width:9px;height:0;border-top:1.5px dashed #8b5cf6;display:inline-block"></span>
-          <span style="color:#a78bfa;font-size:11px">${fmt$(sp.value)}</span>
+          <span style="width:9px;height:2px;background:${MA_COLOR};display:inline-block;border-radius:1px"></span>
+          <span style="color:${MA_COLOR};font-size:11px">${fmt$(sp.value)}</span>
         </span>` : ''}
         ${vp && vp.value > 0 ? `
         <span style="display:inline-flex;align-items:center;gap:4px">
@@ -226,9 +221,8 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
 
     return () => {
       ro.disconnect()
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
       chart.remove()
-      chartRef.current = liveRef.current = sessionRef.current = volRef.current = null
+      chartRef.current = candleRef.current = sessionRef.current = volRef.current = null
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -251,145 +245,85 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
 
   // ── Imperative handle ─────────────────────────────────────────────────────
   useImperativeHandle(ref, () => {
-    const applyLineColor = (price: number) => {
-      const live = liveRef.current
-      if (!live) return
-      const prices = bufferRef.current.map((e) => e.price)
-      const first  = prices[0] ?? price
-      const isUp   = price >= first
-      const lc     = isUp ? '#22c55e' : '#ef4444'
-      lineColorRef.current = lc
-      live.applyOptions({
-        lineColor:   lc,
-        topColor:    isUp ? 'rgba(34,197,94,0.18)'  : 'rgba(239,68,68,0.18)',
-        bottomColor: isUp ? 'rgba(34,197,94,0)'     : 'rgba(239,68,68,0)',
-        crosshairMarkerBackgroundColor: lc,
-      })
-    }
-
-    const updateBadge = (price: number) => {
-      const prices = bufferRef.current.map((e) => e.price)
-      const first  = prices[0] ?? price
-      if (badgeRef.current && prices.length > 1) {
-        const delta = first > 0 ? ((price - first) / first) * 100 : 0
-        const sign  = delta >= 0 ? '+' : ''
-        badgeRef.current.textContent = `${sign}${delta.toFixed(3)}%`
-        badgeRef.current.style.color = price >= first ? '#22c55e' : '#ef4444'
-      }
+    const updateBadge = () => {
+      const buf  = bufferRef.current
+      const last = buf[buf.length - 1]
+      if (!last || !badgeRef.current || buf.length < 2) return
+      const first = buf[0].close
+      const delta = first > 0 ? ((last.close - first) / first) * 100 : 0
+      const sign  = delta >= 0 ? '+' : ''
+      badgeRef.current.textContent = `${sign}${delta.toFixed(3)}%`
+      badgeRef.current.style.color = last.close >= first ? UP_COLOR : DOWN_COLOR
     }
 
     const syncViewport = () => {
       const chart = chartRef.current
       if (!chart || !isLiveRef.current) return
-      // Suit le bord droit (temps reel). Independant du nb de points du buffer :
-      // la serie du graphe grossit alors que le buffer est plafonne, donc un
-      // range base sur buf.length finirait par pointer sur de vieux indices.
       chart.timeScale().scrollToRealTime()
     }
 
-    const paintLivePoint = (price: number) => {
-      const live  = liveRef.current
-      const chart = chartRef.current
-      const buf   = bufferRef.current
-      if (!live || !chart || !buf.length) return
-
-      const last = buf[buf.length - 1]
-      last.price = price
-      displayPriceRef.current = price
-      applyLineColor(price)
-      live.update({ time: last.time as Time, value: price })
-
-      updateBadge(price)
-      syncViewport()
-    }
-
-    const stopAnimation = () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
-      animRef.current = null
-    }
-
-    const animateToPrice = (target: number) => {
-      const from = displayPriceRef.current ?? target
-      if (Math.abs(from - target) < 0.005) {
-        stopAnimation()
-        paintLivePoint(target)
-        return
-      }
-
-      animRef.current = { from, to: target, start: performance.now() }
-
-      const tick = (now: number) => {
-        const anim = animRef.current
-        if (!anim) return
-        const t = Math.min(1, (now - anim.start) / PRICE_ANIM_MS)
-        const price = anim.from + (anim.to - anim.from) * easeOutCubic(t)
-        paintLivePoint(price)
-
-        if (t < 1) {
-          rafRef.current = requestAnimationFrame(tick)
-        } else {
-          paintLivePoint(anim.to)
-          stopAnimation()
-        }
-      }
-
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
-      rafRef.current = requestAnimationFrame(tick)
-    }
-
-    const upsertBuffer = (price: number, ma: number | null, volume: number) => {
+    // Construit/met a jour la bougie de la seconde courante. high/low viennent de
+    // l'agregat 1s (meches) ; open = close de la bougie precedente, close = prix 1s.
+    const upsertBuffer = (price: number, high: number, low: number, ma: number | null, volume: number) => {
       const nowSec = Math.floor(Date.now() / 1000)
       const buf    = bufferRef.current
       const last   = buf[buf.length - 1]
-      const isNewSecond = !last || last.time !== nowSec
 
       if (last && last.time === nowSec) {
-        last.ma = ma ?? last.ma
+        last.high   = Math.max(last.high, high, price)
+        last.low    = Math.min(last.low, low, price)
+        last.close  = price
+        last.ma     = ma ?? last.ma
         last.volume = volume
       } else {
-        buf.push({ price, ma: ma ?? null, volume, time: nowSec })
+        const open = last ? last.close : price
+        buf.push({
+          time:   nowSec,
+          open,
+          high:   Math.max(high, open, price),
+          low:    Math.min(low, open, price),
+          close:  price,
+          ma:     ma ?? null,
+          volume,
+        })
         if (buf.length > MAX_POINTS) buf.shift()
       }
-      return isNewSecond
     }
 
-    // Maj de la ligne MMA 1h et de la barre de volume du point courant.
-    // update() ajoute/modifie un seul point -> pas de redraw complet par seconde.
-    const paintMaAndVolume = () => {
-      const session = sessionRef.current
-      const vol     = volRef.current
-      const last    = bufferRef.current[bufferRef.current.length - 1]
+    // update() ne (re)dessine que le dernier point -> pas de redraw complet/seconde.
+    const paint = () => {
+      const last = bufferRef.current[bufferRef.current.length - 1]
       if (!last) return
-      if (session && last.ma != null) session.update({ time: last.time as Time, value: last.ma })
-      if (vol) vol.update({
+      candleRef.current?.update({
+        time:  last.time as Time,
+        open:  last.open,
+        high:  last.high,
+        low:   last.low,
+        close: last.close,
+      })
+      if (sessionRef.current && last.ma != null) {
+        sessionRef.current.update({ time: last.time as Time, value: last.ma })
+      }
+      volRef.current?.update({
         time:  last.time as Time,
         value: last.volume,
-        color: last.volume > 0 ? 'rgba(107,122,153,0.45)' : 'rgba(107,122,153,0.15)',
+        color: last.close >= last.open ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.4)',
       })
     }
 
     return {
-    push(price: number, ma: number | null, volume: number) {
-      upsertBuffer(price, ma, volume)
-      paintMaAndVolume()
-      // Animation fluide du prix : seul le dernier point est anime via update().
-      animateToPrice(price)
+    push(price: number, high: number, low: number, ma: number | null, volume: number) {
+      upsertBuffer(price, high, low, ma, volume)
+      paint()
+      updateBadge()
+      syncViewport()
     },
 
     reset() {
-      stopAnimation()
-      bufferRef.current    = []
-      displayPriceRef.current = null
-      lineColorRef.current = '#22c55e'
-      liveRef.current?.setData([])
+      bufferRef.current = []
+      candleRef.current?.setData([])
       sessionRef.current?.setData([])
       volRef.current?.setData([])
-      liveRef.current?.applyOptions({
-        lineColor: '#22c55e', topColor: 'rgba(34,197,94,0.18)', bottomColor: 'rgba(34,197,94,0)',
-      })
       if (badgeRef.current) badgeRef.current.textContent = ''
       if (legendRef.current) legendRef.current.style.opacity = '0'
     },
@@ -413,15 +347,15 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       {/* ── Header ── */}
       <div className="flex justify-between items-center mb-2">
         <div className="flex items-center gap-4">
-          <span className="text-xs font-medium text-crypto-text">Price — rolling 60s</span>
+          <span className="text-xs font-medium text-crypto-text">Prix — bougies 1s</span>
           <span className="flex items-center gap-3 text-[10px]">
             <span className="flex items-center gap-1.5">
-              <span style={{ width: 16, height: 0, borderBottom: '2px solid #22c55e', display: 'inline-block', verticalAlign: 'middle' }} />
-              <span className="text-crypto-dim">live</span>
+              <span style={{ width: 8, height: 12, background: UP_COLOR, borderRadius: 1, display: 'inline-block', verticalAlign: 'middle' }} />
+              <span className="text-crypto-dim">bougies</span>
             </span>
             <span className="flex items-center gap-1.5">
-              <span style={{ width: 16, height: 0, borderBottom: '2px dashed #8b5cf6', display: 'inline-block', verticalAlign: 'middle' }} />
-              <span className="text-crypto-dim">1h MA</span>
+              <span style={{ width: 16, height: 0, borderBottom: `2px solid ${MA_COLOR}`, display: 'inline-block', verticalAlign: 'middle' }} />
+              <span className="text-crypto-dim">MMA 5 min</span>
             </span>
             <span className="flex items-center gap-1.5">
               <span style={{ width: 8, height: 8, background: 'rgba(34,197,94,0.5)', borderRadius: 2, display: 'inline-block', verticalAlign: 'middle' }} />
