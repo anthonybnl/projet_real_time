@@ -22,29 +22,21 @@ const API_BASE =
 
 const MAX_TRADES = 15
 const MAX_ANOMALIES = 10
-const HISTORY_SECONDS = 60  // fenetre glissante pour high/low/trades client-side (1 min)
 
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
-interface MarketDerived {
-  high?: number
-  low?: number
-  trades1m?: number
-}
-
 interface State {
   connected: boolean
   analytics: AnalyticsData | null
   trades: Trade[]
   anomalies: AnomalyData[]
   priceChangePct: number
-  market: MarketDerived
 }
 
 type Action =
   | { type: 'CONNECTED'; value: boolean }
-  | { type: 'ANALYTICS'; analytics: AnalyticsData; market: MarketDerived }
+  | { type: 'ANALYTICS'; analytics: AnalyticsData }
   | { type: 'LOAD_TRADES'; trades: Trade[] }
   | { type: 'ANOMALY'; anomaly: AnomalyData }
   | { type: 'LOAD_ANOMALIES'; anomalies: AnomalyData[] }
@@ -55,7 +47,6 @@ const initialState: State = {
   trades: [],
   anomalies: [],
   priceChangePct: 0,
-  market: {},
 }
 
 function reducer(state: State, action: Action): State {
@@ -75,7 +66,7 @@ function reducer(state: State, action: Action): State {
       const incoming = [...a.recent_trades].reverse()
       const trades = [...incoming, ...state.trades].slice(0, MAX_TRADES)
 
-      return { ...state, analytics: a, trades, priceChangePct: pct, market: action.market }
+      return { ...state, analytics: a, trades, priceChangePct: pct }
     }
 
     case 'LOAD_TRADES':
@@ -102,8 +93,6 @@ export default function Dashboard() {
   const priceChartRef  = useRef<PriceChartHandle>(null)
   const volChartRef    = useRef<VolumeChartHandle>(null)
   const globalChartRef = useRef<GlobalChartHandle>(null)
-  // Historique glissant 1 min (prix 1s + nb trades 1s) pour high/low/trades client-side.
-  const historyRef = useRef<{ time: number; price: number; trades: number }[]>([])
 
   const handleMessage = useCallback((msg: WSMessage) => {
     if (msg.type === 'anomaly'){
@@ -118,23 +107,20 @@ export default function Dashboard() {
     const a = msg.data
     const now = Date.now() / 1000
 
-    // --- Courbe de prix : prix 1s + MMA 1h + volume 1s ---
+    // --- Bougies 1s : close=prix 1s, high/low 1s (meches) + MMA 5 min + volume 1s ---
     const price  = a.window_1sec.avg_price
-    const ma1h   = a.window_1hour.avg_price
+    const high   = a.window_1sec.high ?? price
+    const low    = a.window_1sec.low ?? price
+    const ma5    = a.window_5min.avg_price
     const v1s    = a.window_1sec.volume
-    if (price != null) priceChartRef.current?.push(price, ma1h, v1s)
+    if (price != null) priceChartRef.current?.push(price, high, low, ma5, v1s)
 
-    // --- Volume per 10s : split buy/sell approxime depuis recent_trades ---
-    let buyV = 0, sellV = 0
-    for (const t of a.recent_trades) {
-      if (t.side === 'buy')       buyV  += t.volume
-      else if (t.side === 'sell') sellV += t.volume
-      else { buyV += t.volume / 2; sellV += t.volume / 2 }
-    }
-    const sample = buyV + sellV
-    if (sample > 0) {
-      volChartRef.current?.push(v1s * (buyV / sample),  now, 'buy')
-      volChartRef.current?.push(v1s * (sellV / sample), now, 'sell')
+    // --- Volume 1s : split buy/sell exact depuis l'agregat backend ---
+    const buyV  = a.window_1sec.vol_buy
+    const sellV = a.window_1sec.vol_sell
+    if (buyV > 0 || sellV > 0) {
+      if (buyV > 0)  volChartRef.current?.push(buyV,  now, 'buy')
+      if (sellV > 0) volChartRef.current?.push(sellV, now, 'sell')
     } else if (v1s > 0) {
       volChartRef.current?.push(v1s, now, 'unknown')
     }
@@ -142,18 +128,7 @@ export default function Dashboard() {
     // --- Last hour ---
     globalChartRef.current?.push(a.window_1hour)
 
-    // --- High/Low/Trades sur 1 min, calcules cote front (TODO: backend) ---
-    const hist = historyRef.current
-    if (price != null) hist.push({ time: now, price, trades: a.window_1sec.trades_count })
-    historyRef.current = hist.filter((h) => h.time >= now - HISTORY_SECONDS)
-    const prices = historyRef.current.map((h) => h.price)
-    const market: MarketDerived = {
-      high: prices.length ? Math.max(...prices) : undefined,
-      low: prices.length ? Math.min(...prices) : undefined,
-      trades1m: historyRef.current.reduce((s, h) => s + h.trades, 0),
-    }
-
-    dispatch({ type: 'ANALYTICS', analytics: a, market })
+    dispatch({ type: 'ANALYTICS', analytics: a })
   }, [])
 
   const handleStatus = useCallback((connected: boolean) => {
@@ -180,13 +155,22 @@ export default function Dashboard() {
   const lastPrice = a?.window_1sec.avg_price ?? undefined
   const priceUp = state.priceChangePct > 0 ? true : state.priceChangePct < 0 ? false : null
 
-  // Stats pour MarketOverview (high/low/trades = client-side ; vwap/notional approximes)
-  const stats60 = { high: state.market.high, low: state.market.low, count: state.market.trades1m }
+  // Stats pour MarketOverview, toutes issues de l'agregat backend 5 min
+  // (high/low + split buy/sell exact ; notional approxime via vwap * volume).
+  const stats60 = a
+    ? {
+        high: a.window_5min.high ?? undefined,
+        low: a.window_5min.low ?? undefined,
+        count: a.window_5min.trades_count,
+      }
+    : {}
   const stats300 = a
     ? {
         vwap: a.window_5min.avg_price ?? undefined,
         total_volume: a.window_5min.volume,
         total_notional: (a.window_5min.avg_price ?? 0) * a.window_5min.volume,
+        vol_buy: a.window_5min.vol_buy,
+        vol_sell: a.window_5min.vol_sell,
       }
     : {}
 
@@ -244,7 +228,7 @@ export default function Dashboard() {
         <div className="grid grid-cols-3 gap-3">
           <AnomaliesList anomalies={state.anomalies} />
           <TradesTable trades={state.trades} />
-          <MarketOverview stats60={stats60} stats300={stats300} trades={state.trades} />
+          <MarketOverview stats60={stats60} stats300={stats300} />
         </div>
       </div>
     </div>

@@ -151,6 +151,14 @@ def _window_subpipeline(unit: str | None = None, amount: int = 0) -> list[dict]:
                 "volume": {"$sum": "$trade_size"},
                 "avg_price": {"$avg": "$price"},
                 "trades_count": {"$sum": 1},
+                "high": {"$max": "$price"},
+                "low": {"$min": "$price"},
+                "vol_buy": {
+                    "$sum": {"$cond": [{"$eq": ["$side", "buy"]}, "$trade_size", 0]}
+                },
+                "vol_sell": {
+                    "$sum": {"$cond": [{"$eq": ["$side", "sell"]}, "$trade_size", 0]}
+                },
             }
         },
         {
@@ -159,13 +167,25 @@ def _window_subpipeline(unit: str | None = None, amount: int = 0) -> list[dict]:
                 "volume": {"$round": ["$volume", 8]},
                 "avg_price": {"$round": ["$avg_price", 2]},
                 "trades_count": 1,
+                "high": {"$round": ["$high", 2]},
+                "low": {"$round": ["$low", 2]},
+                "vol_buy": {"$round": ["$vol_buy", 8]},
+                "vol_sell": {"$round": ["$vol_sell", 8]},
             }
         },
     ]
     return stages
 
 
-_EMPTY_WINDOW = {"volume": 0, "avg_price": None, "trades_count": 0}
+_EMPTY_WINDOW = {
+    "volume": 0,
+    "avg_price": None,
+    "trades_count": 0,
+    "high": None,
+    "low": None,
+    "vol_buy": 0,
+    "vol_sell": 0,
+}
 
 # Pipeline "court" : fenetres 1s + 5min, recalculees a chaque emission (~1s).
 # Pre-match sur 5min (la plus large des deux) puis $facet pour les deux fenetres.
