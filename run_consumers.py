@@ -1,12 +1,16 @@
 """
 Lance tous les consumers (01 -> 04) en parallele dans des sous-processus.
+Le detecteur d'anomalies utilise toujours la version V4.
 Ctrl+C arrete proprement tous les processus.
 Les demarrages, arrets et erreurs sont logges dans consumers/consumers.log.
 
+Chaque consumer a une ligne de statut volume fixe qui se met a jour en place
+dans la console (panneau live), pendant que les alertes/erreurs/messages de
+demarrage continuent de defiler normalement au-dessus.
+
 Usage:
-    python run_consumers.py              # lance avec detecteur V2
-    python run_consumers.py --v3         # lance avec detecteur V3
-    python run_consumers.py --sensitivity high --v3
+    python run_consumers.py
+    python run_consumers.py --sensitivity high
 """
 
 import subprocess
@@ -16,7 +20,11 @@ import argparse
 import logging
 import os
 import re
-from datetime import datetime
+import threading
+from rich.console import Console
+from rich.live import Live
+from rich.table import Table
+from rich.text import Text
 
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONSUMERS_DIR = os.path.join(PROJECT_DIR, "consumers")
@@ -36,22 +44,15 @@ BASE_CONSUMERS = [
     # ("03_btc_analytics",         "03_btc_analytics.py"),
 ]
 
-DETECTOR_VERSIONS = {
-    # "v2": ("04_anomalie_v2",  "04_detection_anomalie_v2.py"),
-    # "v3": ("04_anomalie_v3",  "04_detection_anomalie_v3.py"),
-    "v4": ("04_anomalie_v4",  "04_detection_anomalie_v4.py")
-}
+DETECTOR = ("04_anomalie_v4", "04_detection_anomalie_v4.py")
 
 COLORS = {
-    "01_coinbase_cleaner":    "\033[36m",   # cyan
-    "01bis_binance_cleaner":  "\033[35m",   # magenta
-    "02_coinbase_mongo":      "\033[33m",   # jaune
-    "03_btc_analytics":       "\033[32m",   # vert
-    # "04_anomalie_v2":         "\033[91m",
-    # "04_anomalie_v3":         "\033[91m",
-    "04_anomalie_v4":         "\033[91m",
+    "01_coinbase_cleaner":    "cyan",
+    "01bis_binance_cleaner":  "magenta",
+    "02_coinbase_mongo":      "yellow",
+    "03_btc_analytics":       "green",
+    "04_anomalie_v4":         "bright_red",
 }
-RESET = "\033[0m"
 
 # Patterns pour detecter les erreurs dans la sortie des consumers
 ERROR_PATTERNS = re.compile(
@@ -63,6 +64,9 @@ ERROR_PATTERNS = re.compile(
     r"^\s+raise )"
 )
 
+# Pattern pour detecter les rapports de volume periodiques (toutes les 10s par consumer)
+VOLUME_PATTERN = re.compile(r"messages traites")
+
 # Logger fichier
 file_logger = logging.getLogger("consumers_log")
 file_logger.setLevel(logging.INFO)
@@ -73,31 +77,37 @@ file_logger.addHandler(fh)
 
 def main():
     parser = argparse.ArgumentParser(description="Lance tous les consumers Kafka")
-    # parser.add_argument("--v3", action="store_true", help="Utiliser le detecteur V3")
-    # parser.add_argument("--v4", action="store_true", help="Utiliser le detecteur V4 (defaut)")
     parser.add_argument("--sensitivity", choices=["low", "medium", "high"], default="medium")
     args = parser.parse_args()
 
-    # if args.v3:
-    #     version = "v3"
-    # else:
-    version = "v4"
-
-    detector_name, detector_file = DETECTOR_VERSIONS[version]
+    detector_name, detector_file = DETECTOR
     consumers = list(BASE_CONSUMERS) + [(detector_name, detector_file)]
 
+    console = Console()
+
     file_logger.info("=" * 60)
-    file_logger.info(f"DEMARRAGE - detecteur: {version}, sensibilite: {args.sensitivity}")
+    file_logger.info(f"DEMARRAGE - detecteur: v4, sensibilite: {args.sensitivity}")
     file_logger.info(f"Consumers: {[name for name, _ in consumers]}")
     file_logger.info("=" * 60)
 
-    print(f"\033[1m{'=' * 60}")
-    print(f"  Lancement de {len(consumers)} consumers (detecteur: {version})")
-    print(f"  Sensibilite: {args.sensitivity}")
-    print(f"  Log: {LOG_FILE}")
-    print(f"{'=' * 60}{RESET}\n")
+    console.print(f"[bold]{'=' * 60}[/bold]")
+    console.print(f"[bold]  Lancement de {len(consumers)} consumers (detecteur: v4)[/bold]")
+    console.print(f"[bold]  Sensibilite: {args.sensitivity}[/bold]")
+    console.print(f"[bold]  Log: {LOG_FILE}[/bold]")
+    console.print(f"[bold]{'=' * 60}[/bold]\n")
 
     processes = {}
+    volume_status = {name: "en attente..." for name, _ in consumers}
+    status_lock = threading.Lock()
+
+    def build_table():
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Consumer")
+        table.add_column("Volume")
+        for name, _ in consumers:
+            style = COLORS.get(name, "white")
+            table.add_row(f"[{style}]{name}[/{style}]", volume_status.get(name, "..."))
+        return table
 
     for name, filename in consumers:
         filepath = os.path.join(CONSUMERS_DIR, filename)
@@ -106,8 +116,8 @@ def main():
         if name.startswith("04_anomalie"):
             cmd += ["--sensitivity", args.sensitivity]
 
-        color = COLORS.get(name, "")
-        print(f"{color}[START] {name} -> {filename}{RESET}")
+        style = COLORS.get(name, "white")
+        console.print(f"[{style}][START] {name} -> {filename}[/{style}]")
         file_logger.info(f"[START] {name} -> {filename}")
 
         env = os.environ.copy()
@@ -123,13 +133,17 @@ def main():
         )
         processes[name] = proc
 
+    live = Live(build_table(), console=console, refresh_per_second=4)
+    live.start()
+
     def shutdown(signum=None, frame=None):
-        print(f"\n\033[1m[SHUTDOWN] Arret de tous les consumers...{RESET}")
+        live.stop()
+        console.print("\n[bold]\\[SHUTDOWN] Arret de tous les consumers...[/bold]")
         file_logger.info("[SHUTDOWN] Arret demande par l'utilisateur")
         for name, proc in processes.items():
             if proc.poll() is None:
                 proc.terminate()
-                print(f"  -> {name} termine")
+                console.print(f"  -> {name} termine")
                 file_logger.info(f"[STOP] {name} termine")
         for proc in processes.values():
             try:
@@ -137,20 +151,27 @@ def main():
             except subprocess.TimeoutExpired:
                 proc.kill()
         file_logger.info("[DONE] Tous les consumers sont arretes")
-        print(f"\033[1m[DONE] Tous les consumers sont arretes.{RESET}")
+        console.print("[bold]\\[DONE] Tous les consumers sont arretes.[/bold]")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
-    import threading
-
     def stream_output(name, proc):
-        color = COLORS.get(name, "")
+        style = COLORS.get(name, "white")
         error_buffer = []
         try:
             for line in proc.stdout:
-                print(f"{color}[{name}]{RESET} {line}", end="")
+                if VOLUME_PATTERN.search(line):
+                    stripped = line.strip()
+                    volume_text = re.sub(rf"^\[{re.escape(name)}\]\s*", "", stripped)
+                    with status_lock:
+                        volume_status[name] = volume_text
+                        live.update(build_table())
+                    file_logger.info(f"[{name}] {stripped}")
+                    continue
+
+                console.print(Text(f"[{name}] ", style=style), Text(line.rstrip("\n")), sep="", soft_wrap=True)
 
                 if ERROR_PATTERNS.search(line):
                     error_buffer.append(line.rstrip())
@@ -188,6 +209,8 @@ def main():
             proc.wait()
     except KeyboardInterrupt:
         shutdown()
+    finally:
+        live.stop()
 
 
 if __name__ == "__main__":
