@@ -110,7 +110,10 @@ def main():
     mongo_client = None
     buffer = []
     total_inserted = 0
+    message_count = 0
     last_flush = time.time()
+    window_count = 0
+    window_start = time.time()
 
     try:
         mongo_client, collection = create_mongo_client()
@@ -121,10 +124,12 @@ def main():
         print("Traitement en cours...\n")
 
         for message in consumer:
+            message_count += 1
+            window_count += 1
+
             doc = to_mongo_doc(message.value)
-            if doc is None:
-                continue
-            buffer.append(doc)
+            if doc is not None:
+                buffer.append(doc)
 
             # Conditions de flush: temps ecoule OU buffer plein
             elapsed = time.time() - last_flush
@@ -132,6 +137,13 @@ def main():
                 inserted = flush_buffer(buffer, collection)
                 total_inserted += inserted
                 last_flush = time.time()
+
+            window_elapsed = time.time() - window_start
+            if window_elapsed >= 10:
+                rate = window_count / window_elapsed
+                print(f"[02_coinbase_mongo] {message_count} messages traites ({rate:.1f}/s)", flush=True)
+                window_count = 0
+                window_start = time.time()
 
     except KeyboardInterrupt:
         print(f"\nArret demande. Flush final du buffer ({len(buffer)} messages)...")

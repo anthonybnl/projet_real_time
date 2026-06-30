@@ -4,6 +4,7 @@ Lit depuis binance.btc.usdt.trades et produit vers btc.cleaned
 """
 
 import json
+import time
 from datetime import datetime, timezone
 from kafka import KafkaConsumer, KafkaProducer, KafkaAdminClient
 from kafka.admin import NewTopic
@@ -146,11 +147,13 @@ def main():
         consumer = create_consumer()
         producer = create_producer()
 
-        print(f"✅ Consumer connecté: {INPUT_TOPIC}")
-        print(f"✅ Producer connecté: {OUTPUT_TOPIC}")
-        print("🔄 Traitement en cours...\n")
+        print(f"✅ Consumer connecté: {INPUT_TOPIC}", flush=True)
+        print(f"✅ Producer connecté: {OUTPUT_TOPIC}", flush=True)
+        print("🔄 Traitement en cours...\n", flush=True)
 
         first = True
+        window_count = 0
+        window_start = time.time()
 
         for message in consumer:
 
@@ -162,11 +165,16 @@ def main():
                 )
                 first = False
 
-            print(
-                f"Message reçu | Offset: {message.offset} | Timestamp: {message.timestamp} | Partition: {message.partition}"
-            )
             handle_message(message.value, producer)
             message_count += 1
+            window_count += 1
+
+            elapsed = time.time() - window_start
+            if elapsed >= 10:
+                rate = window_count / elapsed
+                print(f"[01bis_binance_cleaner] {message_count} messages traites ({rate:.1f}/s)", flush=True)
+                window_count = 0
+                window_start = time.time()
 
     except KeyboardInterrupt:
         print(f"\n⚠️ Arrêt demandé. {message_count} messages traités.")

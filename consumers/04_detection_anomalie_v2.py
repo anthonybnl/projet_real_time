@@ -570,6 +570,9 @@ def main():
     consumer = None
     message_count = 0
     total_exec_time = 0.0
+    window_count = 0
+    window_exec_time = 0.0
+    window_start = time.time()
 
     try:
         detector = AnomalyDetectorV2(
@@ -587,12 +590,19 @@ def main():
             for tp, messages in msg_pack.items():
                 for message in messages:
                     message_count += 1
+                    window_count += 1
                     exec_time = detector.process_message(message.value)
                     total_exec_time += exec_time
+                    window_exec_time += exec_time
 
-                    if message_count % 100 == 0:
-                        avg = total_exec_time / message_count
-                        logger.info(f"Stats | Messages: {message_count} | Temps moyen: {avg:.4f} ms")
+                    elapsed = time.time() - window_start
+                    if elapsed >= 10:
+                        rate = window_count / elapsed
+                        avg = window_exec_time / window_count if window_count else 0
+                        logger.info(f"[04_anomalie_v2] {message_count} messages traites ({rate:.1f}/s) | Temps moyen: {avg:.4f} ms")
+                        window_count = 0
+                        window_exec_time = 0.0
+                        window_start = time.time()
 
     except KeyboardInterrupt:
         logger.info(f"\nArret. {message_count} messages traites.")
