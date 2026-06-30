@@ -21,10 +21,12 @@ export interface AlertData {
   timestamp: number
 }
 
+// Stats par fenetre, toujours partielles cote front (certains champs sont
+// calcules localement : high/low, ou approximes : vwap/notional).
 export interface WindowStats {
-  symbol: string
-  window: number
-  count: number
+  symbol?: string
+  window?: number
+  count?: number
   last_price?: number
   vwap?: number
   avg_price?: number
@@ -34,48 +36,24 @@ export interface WindowStats {
   total_notional?: number
 }
 
-export type SnapshotData = Record<string, Record<string, WindowStats>>
+// Une fenetre d'agregation telle que poussee par le backend (analytics v2).
+export interface WindowAgg {
+  volume: number
+  avg_price: number | null
+  trades_count: number
+}
 
 export interface AnalyticsData {
   timestamp: string
-  symbol: string
-  window_1sec: {
-    avg_price?: number
-    trades_per_second?: number
-  }
-  window_5min: {
-    avg_price?: number
-    volume?: number
-    trades_count?: number
-  }
-  global?: {
-    avg_price_since_start?: number
-    total_trades?: number
-    uptime_seconds?: number
-  }
-  recent_trades?: Trade[]
-  window_60s_extra?: {
-    high?: number
-    low?: number
-    count?: number
-    total_notional?: number
-  }
+  window_1sec: WindowAgg
+  window_5min: WindowAgg
+  window_1hour: WindowAgg
+  recent_trades: Trade[]
 }
 
-export type WSMessage =
-  | { type: 'trade'; data: Trade }
-  | { type: 'alert'; data: AlertData }
-  | { type: 'snapshot'; data: SnapshotData }
-  | { type: 'analytics'; data: AnalyticsData }
+// Le backend ne pousse plus qu'un seul type de message (analytics, ~1/s).
+export type WSMessage = { type: 'analytics'; data: AnalyticsData }
 
-export interface SymbolConfig {
-  label: string
-  key: string
-  exchange: string
-}
-
-export const SYMBOLS: SymbolConfig[] = [
-  { label: 'BTC-USD', key: 'BTC-USD', exchange: 'Coinbase' },
-  { label: 'BTC/USDT', key: 'BTCUSDT', exchange: 'Binance' },
-  { label: 'ETH/USDT', key: 'ETHUSDT', exchange: 'Binance' },
-]
+// Vue unique BTC : le backend agrege binance + coinbase ensemble.
+export const LIVE_SYMBOL = 'BTC'
+export const LIVE_EXCHANGE = 'Binance + Coinbase'

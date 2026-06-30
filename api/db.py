@@ -1,518 +1,259 @@
 """
-
 MongoDB connection and query layer.
 
-
-
-Database  : crypto_realtime
-
-Collections:
-
-  - btc_analytics  : windowed aggregations pushed by Kafka consumers
-
-  - btc_trades     : raw trade documents from Coinbase consumer
-
+Database   : crypto_realtime
+Collection : btc_trades  (cleaned trade documents from the Kafka pipeline)
 """
 
-
-
+import asyncio
 import os
-
-import time
-
 from datetime import datetime, timezone
-
 from typing import AsyncGenerator
-
-
 
 from pymongo import AsyncMongoClient
 
-
-
-from adapters import (
-
-    LIVE_SYMBOL,
-
-    analytics_to_window_stats,
-
-    build_snapshot,
-
-    empty_stats,
-
-    merge_stats,
-
-    trades_to_window_stats,
-
-)
-
-from store import WINDOWS
-
-
-
-MONGO_URI = os.environ['MONGODB_URI']
+MONGO_URI = os.environ["MONGODB_URI"]
 DB_NAME = os.environ["MONGODB_DBNAME"]
 
+DEFAULT_SYMBOL = "BTC-USD"
 
+# Intervalle minimal entre deux emissions analytics (secondes) : cadence 1s/5min.
+AGG_MIN_INTERVAL = float(os.getenv("AGG_MIN_INTERVAL", "1.0"))
+# Periode de rafraichissement de la fenetre 1h (couteuse) : recalculee en cache.
+ONE_HOUR_REFRESH = float(os.getenv("ONE_HOUR_REFRESH", "60.0"))
+# Nb max de trades embarques dans chaque message (recent_trades).
+RECENT_TRADES_LIMIT = int(os.getenv("RECENT_TRADES_LIMIT", "15"))
 
 _client: AsyncMongoClient | None = None
 
 
-
-
-
 def get_client() -> AsyncMongoClient:
-
     global _client
-
     if _client is None:
-
         _client = AsyncMongoClient(MONGO_URI)
-
     return _client
 
 
-
-
-
 def get_db():
-
     return get_client()[DB_NAME]
 
 
-
-
-
 # ---------------------------------------------------------------------------
-
-# Timestamp helpers
-
+# Helpers
 # ---------------------------------------------------------------------------
-
-
 
 def _parse_trade_timestamp(raw) -> datetime:
-
-    """Parse trade timestamp from MongoDB (datetime, ISO string, or Unix float)."""
-
-    if raw is None:
-
-        return datetime.now(timezone.utc)
-
+    """Parse a trade timestamp from MongoDB (Date, ISO string, or Unix float)."""
     if isinstance(raw, datetime):
-
         return raw if raw.tzinfo else raw.replace(tzinfo=timezone.utc)
-
     if isinstance(raw, (int, float)):
-
         return datetime.fromtimestamp(raw, tz=timezone.utc)
-
     if isinstance(raw, str):
-
         try:
-
             return datetime.fromisoformat(raw.replace("Z", "+00:00"))
-
         except ValueError:
-
-            return datetime.now(timezone.utc)
-
+            pass
     return datetime.now(timezone.utc)
 
 
-
-
-
-def _timestamp_to_unix(raw) -> float:
-
-    return _parse_trade_timestamp(raw).timestamp()
-
-
-
-
-
-# ---------------------------------------------------------------------------
-
-# Document normalizers
-
-# ---------------------------------------------------------------------------
-
-
-
-def _normalize_analytics_doc(doc: dict, symbol: str = LIVE_SYMBOL) -> dict:
-
-    """
-
-    Map a btc_analytics MongoDB document to the WebSocket analytics format.
-
-
-
-    Documents have no symbol field — the collection name implies BTC.
-
-    """
-
-    ts = doc.get("timestamp")
-
-    w5 = doc.get("window_5min", {})
-
-    w1 = doc.get("window_1sec", {})
-
-    glb = doc.get("global", {})
-
-
-
-    return {
-
-        "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
-
-        "symbol": symbol,
-
-        "window_5min": {
-
-            "avg_price": w5.get("avg_price"),
-
-            "volume": w5.get("volume"),
-
-            "trades_count": w5.get("trades_count"),
-
-        },
-
-        "window_1sec": {
-
-            "avg_price": w1.get("avg_price"),
-
-            "trades_per_second": w1.get("trades_per_second"),
-
-        },
-
-        "global": {
-
-            "avg_price_since_start": glb.get("avg_price_since_start"),
-
-            "total_trades": glb.get("total_trades"),
-
-            "uptime_seconds": glb.get("uptime_seconds"),
-
-        },
-
-    }
-
-
-
-
-
 def _normalize_trade_doc(doc: dict) -> dict:
-
-    """Map a btc_trades document to our internal trade format."""
-
+    """Map a btc_trades document to the trade format sent to clients."""
     price = doc.get("price", 0)
-
     size = doc.get("trade_size", 0)
-
     return {
-
-        "symbol": doc.get("product_id", LIVE_SYMBOL),
-
+        "symbol": doc.get("product_id", DEFAULT_SYMBOL),
         "price": price,
-
         "volume": size,
-
         "notional": round(price * size, 2),
-
         "side": doc.get("side", "unknown"),
-
-        "source": "coinbase",
-
-        "timestamp": _timestamp_to_unix(doc.get("timestamp")),
-
+        "source": doc.get("source", "unknown"),
+        "timestamp": _parse_trade_timestamp(doc.get("timestamp")).timestamp(),
     }
 
 
-
-
-
 # ---------------------------------------------------------------------------
-
 # Queries
-
 # ---------------------------------------------------------------------------
-
-
-
-async def get_latest_analytics(symbol: str = LIVE_SYMBOL, limit: int = 1) -> list[dict]:
-
-    col = get_db()["btc_analytics"]
-
-    cursor = col.find({}).sort("timestamp", -1).limit(limit)
-
-    docs = await cursor.to_list(length=limit)
-
-    return [_normalize_analytics_doc(d, symbol=symbol) for d in docs]
-
-
-
-
 
 async def get_recent_trades(symbol: str | None = None, limit: int = 50) -> list[dict]:
-
     col = get_db()["btc_trades"]
-
     query = {"product_id": symbol} if symbol else {}
-
     cursor = col.find(query).sort("timestamp", -1).limit(limit)
-
     docs = await cursor.to_list(length=limit)
-
     return [_normalize_trade_doc(d) for d in docs]
-
-
-
-
-
-async def get_recent_trades_raw(limit: int = 15) -> list[dict]:
-
-    """Fetch latest trades normalized — used to enrich analytics broadcasts."""
-
-    col = get_db()["btc_trades"]
-
-    docs = await col.find({}).sort("timestamp", -1).limit(limit).to_list(limit)
-
-    return [_normalize_trade_doc(d) for d in docs]
-
-
-
-
-
-async def _get_last_price(symbol: str = LIVE_SYMBOL) -> float | None:
-
-    col = get_db()["btc_trades"]
-
-    doc = await col.find_one({"product_id": symbol}, sort=[("timestamp", -1)])
-
-    if not doc:
-
-        return None
-
-    return doc.get("price")
-
-
-
-
-
-async def get_trades_in_window(symbol: str, window_seconds: int) -> list[dict]:
-
-    """Return normalized trades within the last window_seconds for symbol."""
-
-    col = get_db()["btc_trades"]
-
-    cutoff_unix = time.time() - window_seconds
-
-    query = {"product_id": symbol}
-
-    cursor = col.find(query).sort("timestamp", -1)
-
-    docs = await cursor.to_list(None)
-
-    trades = []
-
-    for doc in docs:
-
-        ts = _timestamp_to_unix(doc.get("timestamp"))
-
-        if ts >= cutoff_unix:
-
-            trades.append(_normalize_trade_doc(doc))
-
-    trades.reverse()
-
-    return trades
-
-
-
-
-
-async def get_window_stats_db(window_seconds: int = 60, symbol: str = LIVE_SYMBOL) -> dict:
-
-    """Compute high/low/count/notional from btc_trades over the past window_seconds."""
-
-    trades = await get_trades_in_window(symbol, window_seconds)
-
-    if not trades:
-
-        return {}
-
-    prices = [t["price"] for t in trades]
-
-    notionals = [t["notional"] for t in trades]
-
-    return {
-
-        "high": max(prices),
-
-        "low": min(prices),
-
-        "count": len(trades),
-
-        "total_notional": round(sum(notionals), 2),
-
-    }
-
-
-
 
 
 async def get_tracked_symbols() -> list[str]:
-
     col = get_db()["btc_trades"]
-
-    doc = await col.find_one({"product_id": LIVE_SYMBOL})
-
-    return [LIVE_SYMBOL] if doc else []
-
-
-
-
-
-async def get_stats(symbol: str, window: int) -> dict:
-
-    """WindowStats for live mode — same shape as store.get_stats()."""
-
-    if symbol != LIVE_SYMBOL:
-
-        return empty_stats(symbol, window)
-
-
-
-    trades = await get_trades_in_window(symbol, window)
-
-    trade_stats = trades_to_window_stats(symbol, window, trades)
-
-
-
-    if window == 300:
-
-        analytics_list = await get_latest_analytics(symbol=LIVE_SYMBOL, limit=1)
-
-        if analytics_list:
-
-            analytics = analytics_list[0]
-
-            analytics["window_60s_extra"] = await get_window_stats_db(60, symbol)
-
-            analytics_stats = analytics_to_window_stats(analytics, window, symbol)
-
-            return merge_stats(trade_stats, analytics_stats)
-
-
-
-    if not trades:
-
-        last_price = await _get_last_price(symbol)
-
-        return empty_stats(symbol, window, last_price=last_price)
-
-
-
-    return trade_stats
-
-
-
-
-
-async def get_all_stats_snapshot() -> dict:
-
-    """Snapshot matching store.get_all_stats() for WebSocket connect."""
-
-    symbols = await get_tracked_symbols()
-
-    if not symbols:
-
-        return {}
-
-
-
-    symbol = symbols[0]
-
-    stats_by_window = {}
-
-    for w in WINDOWS:
-
-        stats_by_window[w] = await get_stats(symbol, w)
-
-    return build_snapshot(symbol, stats_by_window)
-
-
-
-
-
-async def get_alerts(limit: int = 20) -> list[dict]:
-
-    col = get_db()["alerts"]
-
-    cursor = col.find().sort("timestamp", -1).limit(limit)
-
-    return await cursor.to_list(length=limit)
-
-
-
+    return await col.distinct("product_id")
 
 
 # ---------------------------------------------------------------------------
-
-# Change streams
-
+# Analytics aggregation
 # ---------------------------------------------------------------------------
 
+def _window_subpipeline(unit: str | None = None, amount: int = 0) -> list[dict]:
+    """
+    Sous-pipeline d'une fenetre temporelle : volume, prix moyen, nb de trades.
+    `unit`/`amount` -> borne basse via $dateSubtract sur $$NOW. None = toute la
+    fenetre deja filtree en amont (cas 1h, qui est le pre-match global).
+    """
+    stages: list[dict] = []
+    if unit is not None:
+        stages.append({
+            "$match": {
+                "$expr": {
+                    "$gte": [
+                        "$timestamp",
+                        {"$dateSubtract": {"startDate": "$$NOW", "unit": unit, "amount": amount}},
+                    ]
+                }
+            }
+        })
+    stages += [
+        {
+            "$group": {
+                "_id": None,
+                "volume": {"$sum": "$trade_size"},
+                "avg_price": {"$avg": "$price"},
+                "trades_count": {"$sum": 1},
+            }
+        },
+        {
+            "$project": {
+                "_id": 0,
+                "volume": {"$round": ["$volume", 8]},
+                "avg_price": {"$round": ["$avg_price", 2]},
+                "trades_count": 1,
+            }
+        },
+    ]
+    return stages
 
 
-async def trades_change_stream() -> AsyncGenerator[dict, None]:
+_EMPTY_WINDOW = {"volume": 0, "avg_price": None, "trades_count": 0}
 
-    """Watches btc_trades for new inserts and yields normalized trade dicts."""
+# Pipeline "court" : fenetres 1s + 5min, recalculees a chaque emission (~1s).
+# Pre-match sur 5min (la plus large des deux) puis $facet pour les deux fenetres.
+SHORT_PIPELINE = [
+    {
+        "$match": {
+            "$expr": {
+                "$gte": [
+                    "$timestamp",
+                    {"$dateSubtract": {"startDate": "$$NOW", "unit": "minute", "amount": 5}},
+                ]
+            }
+        }
+    },
+    {
+        "$facet": {
+            "window_1sec": _window_subpipeline("second", 1),
+            "window_5min": _window_subpipeline(),  # = tout le pre-match (5min)
+        }
+    },
+    {
+        "$project": {
+            "timestamp": "$$NOW",
+            "window_1sec": {"$ifNull": [{"$arrayElemAt": ["$window_1sec", 0]}, _EMPTY_WINDOW]},
+            "window_5min": {"$ifNull": [{"$arrayElemAt": ["$window_5min", 0]}, _EMPTY_WINDOW]},
+        }
+    },
+]
 
+# Pipeline "1h" isole : couteux (~668k docs), recalcule seulement toutes les
+# ONE_HOUR_REFRESH secondes et mis en cache.
+ONE_HOUR_PIPELINE = _window_subpipeline("hour", 1)
+
+
+async def _run_short(col) -> dict | None:
+    """Fenetres 1s + 5min en une passe."""
+    async for doc in await col.aggregate(SHORT_PIPELINE):
+        return doc
+    return None
+
+
+async def _run_one_hour(col) -> dict:
+    """Fenetre 1h seule."""
+    async for doc in await col.aggregate(ONE_HOUR_PIPELINE):
+        return doc
+    return dict(_EMPTY_WINDOW)
+
+
+async def analytics_stream() -> AsyncGenerator[dict, None]:
+    """
+    Diffuse l'analytics v2, pilote par le change stream de btc_trades (sans horloge).
+
+    Trois taches concurrentes :
+      - reader      : lit le change stream en continu et bufferise chaque trade,
+                      puis signale l'arrivee de donnees (asyncio.Event).
+      - refresher   : recalcule la fenetre 1h (couteuse) toutes les ONE_HOUR_REFRESH
+                      secondes et la met en cache.
+      - emitter (ce generateur) : reveille par l'Event, applique un throttle
+                      leading-edge (>= AGG_MIN_INTERVAL, horloge monotone), recalcule
+                      1s/5min, lit la 1h en cache, et yield un payload portant les
+                      RECENT_TRADES_LIMIT derniers trades depuis la derniere emission.
+
+    Le reader etant decouple, le buffer continue de se remplir pendant l'agregation
+    (recent_trades reste correct meme si une requete prend du temps). Pas de trade
+    -> pas d'emission.
+    """
+    loop = asyncio.get_running_loop()
     col = get_db()["btc_trades"]
 
-    async with await col.watch([{"$match": {"operationType": "insert"}}]) as stream:
+    buffer: list[dict] = []
+    new_data = asyncio.Event()
+    cache: dict = {"window_1hour": dict(_EMPTY_WINDOW)}
 
-        async for change in stream:
+    async def reader() -> None:
+        async with await col.watch([{"$match": {"operationType": "insert"}}]) as stream:
+            async for change in stream:
+                doc = change.get("fullDocument")
+                if doc:
+                    buffer.append(_normalize_trade_doc(doc))
+                    new_data.set()
 
-            doc = change.get("fullDocument")
+    async def refresher() -> None:
+        while True:
+            await asyncio.sleep(ONE_HOUR_REFRESH)
+            cache["window_1hour"] = await _run_one_hour(col)
 
-            if doc:
+    # 1h initiale avant de demarrer (le reader tourne deja et remplit le buffer).
+    reader_task = asyncio.create_task(reader())
+    cache["window_1hour"] = await _run_one_hour(col)
+    refresher_task = asyncio.create_task(refresher())
 
-                yield _normalize_trade_doc(doc)
+    last_emit = float("-inf")
+    try:
+        while True:
+            await new_data.wait()
+            new_data.clear()
 
+            now = loop.time()
+            if now - last_emit < AGG_MIN_INTERVAL:
+                continue  # trop tot : le prochain trade re-declenchera le check
+            last_emit = now
 
+            short = await _run_short(col)
+            if short is None:
+                continue
 
+            # Derniers trades depuis la derniere emission (cappes), puis on vide.
+            trades = buffer[-RECENT_TRADES_LIMIT:] if buffer else []
+            buffer.clear()
 
-
-async def analytics_change_stream() -> AsyncGenerator[dict, None]:
-
-    """
-
-    Watches btc_analytics for new inserts and yields normalized documents.
-
-    Used by main.py when USE_MOCK=false. Live pipeline is BTC-USD (Coinbase) only.
-
-    """
-
-    col = get_db()["btc_analytics"]
-
-    async with await col.watch([{"$match": {"operationType": "insert"}}]) as stream:
-
-        async for change in stream:
-
-            doc = change.get("fullDocument", {})
-
-            trades = await get_recent_trades_raw(limit=15)
-
-            win_stats = await get_window_stats_db(window_seconds=60)
-
-            normalized = _normalize_analytics_doc(doc, symbol=LIVE_SYMBOL)
-
-            normalized["recent_trades"] = trades
-
-            normalized["window_60s_extra"] = win_stats
-
-            yield normalized
-
-
+            yield {
+                "timestamp": short["timestamp"],
+                "window_1sec": short["window_1sec"],
+                "window_5min": short["window_5min"],
+                "window_1hour": cache["window_1hour"],
+                "recent_trades": trades,
+            }
+    finally:
+        reader_task.cancel()
+        refresher_task.cancel()
+        for task in (reader_task, refresher_task):
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass

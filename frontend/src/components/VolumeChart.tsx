@@ -212,13 +212,12 @@ const VolumeChart = forwardRef<VolumeChartHandle, { symbol: string }>(({ symbol 
       },
     })
 
-    const interval = setInterval(applyBuckets, 1000)
+    // Plus de setInterval : les buckets sont recalcules a chaque push (1/s via analytics).
     return () => {
-      clearInterval(interval)
       chartRef.current?.destroy()
       chartRef.current = null
     }
-  }, [applyBuckets])
+  }, [])
 
   useImperativeHandle(ref, () => ({
     push(volume: number, timestamp: number, side: 'buy' | 'sell' | 'unknown' = 'unknown') {
