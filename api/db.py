@@ -1,8 +1,8 @@
 """
 MongoDB connection and query layer.
 
-Database   : crypto_realtime
-Collection : btc_trades  (cleaned trade documents from the Kafka pipeline)
+Database    : crypto_realtime
+Collections : btc_trades, btc_anomalies
 """
 
 import asyncio
@@ -42,6 +42,7 @@ def get_db():
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _parse_trade_timestamp(raw) -> datetime:
     """Parse a trade timestamp from MongoDB (Date, ISO string, or Unix float)."""
     if isinstance(raw, datetime):
@@ -75,6 +76,7 @@ def _normalize_trade_doc(doc: dict) -> dict:
 # Queries
 # ---------------------------------------------------------------------------
 
+
 async def get_recent_trades(symbol: str | None = None, limit: int = 50) -> list[dict]:
     col = get_db()["btc_trades"]
     query = {"product_id": symbol} if symbol else {}
@@ -88,9 +90,33 @@ async def get_tracked_symbols() -> list[str]:
     return await col.distinct("product_id")
 
 
+def _normalize_anomaly_doc(doc: dict) -> dict:
+    """Map a btc_anomalies document to the format sent to clients."""
+    return {
+        "id": str(doc["_id"]) if doc.get("_id") is not None else None,
+        "anomaly_type": doc.get("anomaly_type", "UNKNOWN"),
+        "timestamp": _parse_trade_timestamp(doc.get("timestamp")).timestamp(),
+        "exchange": doc.get("exchange", "unknown"),
+        "symbol": doc.get("symbol", DEFAULT_SYMBOL),
+        "details": doc.get("details", {}),
+        "trigger_message": doc.get("trigger_message"),
+    }
+
+
+async def get_recent_anomalies(
+    symbol: str | None = None, limit: int = 10
+) -> list[dict]:
+    col = get_db()["btc_anomalies"]
+    query = {"symbol": symbol} if symbol else {}
+    cursor = col.find(query).sort("timestamp", -1).limit(limit)
+    docs = await cursor.to_list(length=limit)
+    return [_normalize_anomaly_doc(d) for d in docs]
+
+
 # ---------------------------------------------------------------------------
 # Analytics aggregation
 # ---------------------------------------------------------------------------
+
 
 def _window_subpipeline(unit: str | None = None, amount: int = 0) -> list[dict]:
     """
@@ -100,16 +126,24 @@ def _window_subpipeline(unit: str | None = None, amount: int = 0) -> list[dict]:
     """
     stages: list[dict] = []
     if unit is not None:
-        stages.append({
-            "$match": {
-                "$expr": {
-                    "$gte": [
-                        "$timestamp",
-                        {"$dateSubtract": {"startDate": "$$NOW", "unit": unit, "amount": amount}},
-                    ]
+        stages.append(
+            {
+                "$match": {
+                    "$expr": {
+                        "$gte": [
+                            "$timestamp",
+                            {
+                                "$dateSubtract": {
+                                    "startDate": "$$NOW",
+                                    "unit": unit,
+                                    "amount": amount,
+                                }
+                            },
+                        ]
+                    }
                 }
             }
-        })
+        )
     stages += [
         {
             "$group": {
@@ -141,7 +175,13 @@ SHORT_PIPELINE = [
             "$expr": {
                 "$gte": [
                     "$timestamp",
-                    {"$dateSubtract": {"startDate": "$$NOW", "unit": "minute", "amount": 5}},
+                    {
+                        "$dateSubtract": {
+                            "startDate": "$$NOW",
+                            "unit": "minute",
+                            "amount": 5,
+                        }
+                    },
                 ]
             }
         }
@@ -155,8 +195,12 @@ SHORT_PIPELINE = [
     {
         "$project": {
             "timestamp": "$$NOW",
-            "window_1sec": {"$ifNull": [{"$arrayElemAt": ["$window_1sec", 0]}, _EMPTY_WINDOW]},
-            "window_5min": {"$ifNull": [{"$arrayElemAt": ["$window_5min", 0]}, _EMPTY_WINDOW]},
+            "window_1sec": {
+                "$ifNull": [{"$arrayElemAt": ["$window_1sec", 0]}, _EMPTY_WINDOW]
+            },
+            "window_5min": {
+                "$ifNull": [{"$arrayElemAt": ["$window_5min", 0]}, _EMPTY_WINDOW]
+            },
         }
     },
 ]
@@ -257,3 +301,13 @@ async def analytics_stream() -> AsyncGenerator[dict, None]:
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+
+
+async def anomalies_change_stream() -> AsyncGenerator[dict, None]:
+    """Watch btc_anomalies for new inserts and yield normalized anomaly dicts."""
+    col = get_db()["btc_anomalies"]
+    async with await col.watch([{"$match": {"operationType": "insert"}}]) as stream:
+        async for change in stream:
+            doc = change.get("fullDocument")
+            if doc:
+                yield _normalize_anomaly_doc(doc)

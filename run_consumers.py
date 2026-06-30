@@ -37,8 +37,8 @@ BASE_CONSUMERS = [
 ]
 
 DETECTOR_VERSIONS = {
-    "v2": ("04_anomalie_v2",  "04_detection_anomalie_v2.py"),
-    "v3": ("04_anomalie_v3",  "04_detection_anomalie_v3.py"),
+    # "v2": ("04_anomalie_v2",  "04_detection_anomalie_v2.py"),
+    # "v3": ("04_anomalie_v3",  "04_detection_anomalie_v3.py"),
     "v4": ("04_anomalie_v4",  "04_detection_anomalie_v4.py")
 }
 
@@ -47,8 +47,8 @@ COLORS = {
     "01bis_binance_cleaner":  "\033[35m",   # magenta
     "02_coinbase_mongo":      "\033[33m",   # jaune
     "03_btc_analytics":       "\033[32m",   # vert
-    "04_anomalie_v2":         "\033[91m",
-    "04_anomalie_v3":         "\033[91m",
+    # "04_anomalie_v2":         "\033[91m",
+    # "04_anomalie_v3":         "\033[91m",
     "04_anomalie_v4":         "\033[91m",
 }
 RESET = "\033[0m"
@@ -73,15 +73,15 @@ file_logger.addHandler(fh)
 
 def main():
     parser = argparse.ArgumentParser(description="Lance tous les consumers Kafka")
-    parser.add_argument("--v3", action="store_true", help="Utiliser le detecteur V3")
-    parser.add_argument("--v4", action="store_true", help="Utiliser le detecteur V4 (defaut)")
+    # parser.add_argument("--v3", action="store_true", help="Utiliser le detecteur V3")
+    # parser.add_argument("--v4", action="store_true", help="Utiliser le detecteur V4 (defaut)")
     parser.add_argument("--sensitivity", choices=["low", "medium", "high"], default="medium")
     args = parser.parse_args()
 
-    if args.v3:
-        version = "v3"
-    else:
-        version = "v4"
+    # if args.v3:
+    #     version = "v3"
+    # else:
+    version = "v4"
 
     detector_name, detector_file = DETECTOR_VERSIONS[version]
     consumers = list(BASE_CONSUMERS) + [(detector_name, detector_file)]

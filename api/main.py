@@ -19,6 +19,7 @@ load_dotenv()
 
 from websocket_manager import manager
 from routes.metrics import router as metrics_router
+from routes.anomalies import router as anomalies_router
 from routes.ws import router as ws_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -35,6 +36,13 @@ async def _mongo_analytics_loop() -> None:
         await manager.broadcast({"type": "analytics", "data": analytics})
 
 
+async def _mongo_anomalies_loop() -> None:
+    from db import anomalies_change_stream
+    log.info("Ingestion mode: MONGODB anomalies change stream")
+    async for anomaly in anomalies_change_stream():
+        await manager.broadcast({"type": "anomaly", "data": anomaly})
+
+
 # ---------------------------------------------------------------------------
 # App lifecycle
 # ---------------------------------------------------------------------------
@@ -43,6 +51,7 @@ async def _mongo_analytics_loop() -> None:
 async def lifespan(app: FastAPI):
     tasks = [
         asyncio.create_task(_mongo_analytics_loop()),
+        asyncio.create_task(_mongo_anomalies_loop()),
     ]
     yield
     for task in tasks:
@@ -70,4 +79,5 @@ app.add_middleware(
 )
 
 app.include_router(metrics_router, prefix="/api", tags=["metrics"])
+app.include_router(anomalies_router, prefix="/api", tags=["anomalies"])
 app.include_router(ws_router, tags=["websocket"])
