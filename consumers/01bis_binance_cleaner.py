@@ -75,7 +75,6 @@ def handle_message(data, producer: KafkaProducer):
     cleaned = None
 
     try:
-        price = float(data.get("p", 0))
         trade_size = float(data.get("q", 0))
         trade_time_ms = int(data.get("T", 0))
 
@@ -89,6 +88,17 @@ def handle_message(data, producer: KafkaProducer):
         
         is_buyer_maker = data.get("m", False)
         side = "sell" if is_buyer_maker else "buy"
+
+        product_id = data.get("s", "BTCUSDT")
+
+        raw_price = float(data.get("p", 0))
+
+        if product_id == "BTCUSDT":
+            price = raw_price * 0.9984
+            product_id = "BTC-USD"
+            print(f"Conversion du prix pour {product_id}: {raw_price} -> {price}")
+        else:
+            price = raw_price
         
         cleaned = {
             "timestamp": timestamp,
