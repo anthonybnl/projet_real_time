@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import gsap from 'gsap'
 import type { AnomalyData, AnomalyTrigger, AnomalyType } from '@/types'
+import { useTheme } from '@/contexts/ThemeContext'
 
 function fmt(ts: number) {
   return new Date(ts * 1000).toLocaleTimeString('fr-FR', {
@@ -201,7 +202,9 @@ function AnomalyPopover({
   anomaly: AnomalyData
   onClose: () => void
 }) {
+  const { theme } = useTheme()
   const s = anomalyStyle(anomaly.anomaly_type)
+  const badgeColor = theme === 'light' ? s.accent : s.badgeText
   const fields = popoverFields(anomaly)
   const trigger = anomaly.trigger_message ?? null
   const triggerData = trigger ? triggerFields(trigger) : []
@@ -210,7 +213,7 @@ function AnomalyPopover({
   return (
     <div
       className="relative w-[min(420px,88vmin)] aspect-square flex flex-col rounded-2xl overflow-hidden
-        border border-white/[0.12] bg-[rgba(13,21,38,0.55)] backdrop-blur-2xl
+        border border-crypto-border bg-[var(--glass-bg)] backdrop-blur-2xl
         shadow-[0_24px_80px_rgba(0,0,0,0.55),inset_0_1px_0_rgba(255,255,255,0.06)]"
       role="dialog"
       aria-label="Détails de l'anomalie"
@@ -229,7 +232,7 @@ function AnomalyPopover({
           <div className="flex flex-wrap items-center gap-2">
             <span
               className="text-[10px] font-bold px-2 py-0.5 rounded-md backdrop-blur-sm"
-              style={{ background: s.badgeBg, color: s.badgeText }}
+              style={{ background: s.badgeBg, color: badgeColor }}
             >
               {anomalyBadgeLabel(anomaly)}
             </span>
@@ -370,7 +373,9 @@ function AnomalyRow({
   onSelect: () => void
 }) {
   const rowRef = useRef<HTMLButtonElement>(null)
+  const { theme } = useTheme()
   const s = anomalyStyle(anomaly.anomaly_type)
+  const badgeColor = theme === 'light' ? s.accent : s.badgeText
 
   useEffect(() => {
     if (!rowRef.current) return
@@ -395,7 +400,7 @@ function AnomalyRow({
     >
       <span
         className="shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded leading-tight tabular-nums"
-        style={{ background: s.badgeBg, color: s.badgeText }}
+        style={{ background: s.badgeBg, color: badgeColor }}
       >
         {anomalyBadgeLabel(anomaly)}
       </span>
