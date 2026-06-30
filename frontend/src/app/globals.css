@@ -15,6 +15,7 @@
   --crypto-green:  #22c55e;
   --crypto-red:    #ef4444;
   --crypto-yellow: #f59e0b;
+  --glass-bg:      rgba(13,21,38,0.55);
 }
 
 /* ── Light theme ──────────────────────────────────────────────────────────── */
@@ -29,6 +30,7 @@
   --crypto-green:  #16a34a;
   --crypto-red:    #dc2626;
   --crypto-yellow: #d97706;
+  --glass-bg:      rgba(255,255,255,0.7);
 }
 
 * { box-sizing: border-box; }
