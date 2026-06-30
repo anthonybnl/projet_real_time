@@ -17,11 +17,10 @@ const PRICE_ANIM_MS = 450 // smooth transition duration for live price
 const TV_FONT = "'Trebuchet MS', Roboto, Ubuntu, sans-serif"
 
 interface Entry {
-  price:      number
-  sessionAvg: number | null
-  volume:     number
-  buyVol:     number
-  time:       number  // Unix seconds
+  price:  number
+  ma:     number | null  // moyenne mobile 1h
+  volume: number
+  time:   number         // Unix seconds
 }
 
 const TC = {
@@ -40,8 +39,8 @@ const TC = {
 } as const
 
 export interface PriceChartHandle {
-  push(price: number, sessionAvg?: number): void
-  pushTrade(volume: number, side: 'buy' | 'sell' | 'unknown'): void
+  // Appele 1x/seconde : prix 1s, moyenne mobile 1h (ligne secondaire), volume 1s.
+  push(price: number, ma: number | null, volume: number): void
   reset(): void
 }
 
@@ -62,7 +61,6 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
   const sessionRef   = useRef<ISeriesApi<'Line'> | null>(null)
   const volRef       = useRef<ISeriesApi<'Histogram'> | null>(null)
   const bufferRef    = useRef<Entry[]>([])
-  const volAccRef    = useRef<{ time: number; buy: number; sell: number } | null>(null)
   const lineColorRef = useRef('#22c55e')
   const isLiveRef    = useRef(true)
   const displayPriceRef = useRef<number | null>(null)
@@ -174,14 +172,12 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       const vp = param.seriesData.get(volSeries)     as { value: number } | undefined
       if (!lp) { legend.style.opacity = '0'; return }
 
-      const entry  = bufferRef.current.find((e) => e.time === (param.time as number))
       const prices = bufferRef.current.map((e) => e.price)
       const first  = prices[0] ?? lp.value
       const delta  = first > 0 ? ((lp.value - first) / first) * 100 : 0
       const sign   = delta >= 0 ? '+' : ''
       const lc     = lineColorRef.current
       const curTc  = TC[themeRef.current].tooltip
-      const buyPct = entry && entry.volume > 0 ? ((entry.buyVol / entry.volume) * 100).toFixed(0) : null
 
       const t    = new Date((param.time as number) * 1000)
       const tStr = t.getHours().toString().padStart(2, '0') + ':' +
@@ -205,8 +201,8 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
         </span>` : ''}
         ${vp && vp.value > 0 ? `
         <span style="display:inline-flex;align-items:center;gap:4px">
-          <span style="width:7px;height:7px;display:inline-block;border-radius:1px;background:${buyPct && Number(buyPct) >= 50 ? 'rgba(34,197,94,0.6)' : 'rgba(239,68,68,0.6)'}"></span>
-          <span style="color:${curTc.dim};font-size:10px">Vol ${vp.value.toFixed(3)}${buyPct ? ` · ${buyPct}% buy` : ''}</span>
+          <span style="width:7px;height:7px;display:inline-block;border-radius:1px;background:rgba(107,122,153,0.6)"></span>
+          <span style="color:${curTc.dim};font-size:10px">Vol ${vp.value.toFixed(3)}</span>
         </span>` : ''}
       `
       legend.style.opacity = '1'
@@ -296,34 +292,17 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       }
     }
 
-    const paintLivePoint = (price: number, fullRedraw = false) => {
-      const live    = liveRef.current
-      const session = sessionRef.current
-      const vol     = volRef.current
-      const chart   = chartRef.current
-      const buf     = bufferRef.current
-      if (!live || !session || !vol || !chart || !buf.length) return
+    const paintLivePoint = (price: number) => {
+      const live  = liveRef.current
+      const chart = chartRef.current
+      const buf   = bufferRef.current
+      if (!live || !chart || !buf.length) return
 
       const last = buf[buf.length - 1]
       last.price = price
       displayPriceRef.current = price
       applyLineColor(price)
-
-      if (fullRedraw) {
-        live.setData(buf.map((e) => ({ time: e.time as Time, value: e.price })))
-        const sessionData = buf.filter((e) => e.sessionAvg != null)
-          .map((e) => ({ time: e.time as Time, value: e.sessionAvg! }))
-        if (sessionData.length > 0) session.setData(sessionData)
-        vol.setData(buf.map((e) => ({
-          time:  e.time as Time,
-          value: e.volume,
-          color: e.volume > 0
-            ? (e.buyVol / e.volume >= 0.5 ? 'rgba(34,197,94,0.45)' : 'rgba(239,68,68,0.45)')
-            : 'rgba(107,122,153,0.15)',
-        })))
-      } else {
-        live.update({ time: last.time as Time, value: price })
-      }
+      live.update({ time: last.time as Time, value: price })
 
       updateBadge(price)
       syncViewport()
@@ -366,83 +345,48 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
       rafRef.current = requestAnimationFrame(tick)
     }
 
-    const upsertBuffer = (price: number, sessionAvg?: number) => {
+    const upsertBuffer = (price: number, ma: number | null, volume: number) => {
       const nowSec = Math.floor(Date.now() / 1000)
-      const acc    = volAccRef.current
-      const volume = acc ? acc.buy + acc.sell : 0
-      const buyVol = acc ? acc.buy : 0
       const buf    = bufferRef.current
       const last   = buf[buf.length - 1]
       const isNewSecond = !last || last.time !== nowSec
 
       if (last && last.time === nowSec) {
-        last.sessionAvg = sessionAvg ?? last.sessionAvg
+        last.ma = ma ?? last.ma
         last.volume = volume
-        last.buyVol = buyVol
       } else {
-        buf.push({
-          price,
-          sessionAvg: sessionAvg ?? null,
-          volume,
-          buyVol,
-          time: nowSec,
-        })
+        buf.push({ price, ma: ma ?? null, volume, time: nowSec })
         if (buf.length > MAX_POINTS) buf.shift()
       }
-
       return isNewSecond
     }
 
-    const refreshVolumeSeries = () => {
-      const vol = volRef.current
+    // Maj de la ligne MMA 1h et de la barre de volume du point courant.
+    // update() ajoute/modifie un seul point -> pas de redraw complet par seconde.
+    const paintMaAndVolume = () => {
       const session = sessionRef.current
-      const buf = bufferRef.current
-      if (!vol || !session) return
-      vol.setData(buf.map((e) => ({
-        time:  e.time as Time,
-        value: e.volume,
-        color: e.volume > 0
-          ? (e.buyVol / e.volume >= 0.5 ? 'rgba(34,197,94,0.45)' : 'rgba(239,68,68,0.45)')
-          : 'rgba(107,122,153,0.15)',
-      })))
-      const sessionData = buf.filter((e) => e.sessionAvg != null)
-        .map((e) => ({ time: e.time as Time, value: e.sessionAvg! }))
-      if (sessionData.length > 0) session.setData(sessionData)
+      const vol     = volRef.current
+      const last    = bufferRef.current[bufferRef.current.length - 1]
+      if (!last) return
+      if (session && last.ma != null) session.update({ time: last.time as Time, value: last.ma })
+      if (vol) vol.update({
+        time:  last.time as Time,
+        value: last.volume,
+        color: last.volume > 0 ? 'rgba(107,122,153,0.45)' : 'rgba(107,122,153,0.15)',
+      })
     }
 
     return {
-    pushTrade(volume: number, side: 'buy' | 'sell' | 'unknown') {
-      const nowSec = Math.floor(Date.now() / 1000)
-      if (!volAccRef.current || volAccRef.current.time !== nowSec)
-        volAccRef.current = { time: nowSec, buy: 0, sell: 0 }
-      const acc = volAccRef.current
-      if (side === 'buy')       acc.buy  += volume
-      else if (side === 'sell') acc.sell += volume
-      else                      { acc.buy += volume / 2; acc.sell += volume / 2 }
-      refreshVolumeSeries()
-    },
-
-    push(price: number, sessionAvg?: number) {
-      const prevDisplay = displayPriceRef.current
-      const isNewSecond = upsertBuffer(price, sessionAvg)
-
-      if (isNewSecond) {
-        const startPrice = prevDisplay ?? price
-        const last = bufferRef.current[bufferRef.current.length - 1]
-        if (last) last.price = startPrice
-        stopAnimation()
-        paintLivePoint(startPrice, true)
-        animateToPrice(price)
-      } else {
-        refreshVolumeSeries()
-        animateToPrice(price)
-      }
+    push(price: number, ma: number | null, volume: number) {
+      upsertBuffer(price, ma, volume)
+      paintMaAndVolume()
+      // Animation fluide du prix : seul le dernier point est anime via update().
+      animateToPrice(price)
     },
 
     reset() {
       stopAnimation()
       bufferRef.current    = []
-      volAccRef.current    = null
       displayPriceRef.current = null
       lineColorRef.current = '#22c55e'
       liveRef.current?.setData([])
@@ -491,7 +435,7 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
             </span>
             <span className="flex items-center gap-1.5">
               <span style={{ width: 16, height: 0, borderBottom: '2px dashed #8b5cf6', display: 'inline-block', verticalAlign: 'middle' }} />
-              <span className="text-crypto-dim">session avg</span>
+              <span className="text-crypto-dim">1h MA</span>
             </span>
             <span className="flex items-center gap-1.5">
               <span style={{ width: 8, height: 8, background: 'rgba(34,197,94,0.5)', borderRadius: 2, display: 'inline-block', verticalAlign: 'middle' }} />
