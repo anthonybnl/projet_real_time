@@ -11,8 +11,7 @@ import {
 } from 'lightweight-charts'
 import { useTheme } from '@/contexts/ThemeContext'
 
-const MAX_POINTS  = 120   // history kept in buffer
-const VISIBLE_BARS = 60   // bars shown in live mode
+const MAX_POINTS  = 120   // history kept in buffer (couleur/delta de reference)
 const PRICE_ANIM_MS = 450 // smooth transition duration for live price
 const TV_FONT = "'Trebuchet MS', Roboto, Ubuntu, sans-serif"
 
@@ -281,15 +280,11 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
 
     const syncViewport = () => {
       const chart = chartRef.current
-      const buf   = bufferRef.current
-      if (!chart || !buf.length) return
-      if (isLiveRef.current) {
-        const lastIdx = buf.length - 1
-        chart.timeScale().setVisibleLogicalRange({
-          from: Math.max(0, lastIdx - VISIBLE_BARS + 1),
-          to:   lastIdx + 8,
-        })
-      }
+      if (!chart || !isLiveRef.current) return
+      // Suit le bord droit (temps reel). Independant du nb de points du buffer :
+      // la serie du graphe grossit alors que le buffer est plafonne, donc un
+      // range base sur buf.length finirait par pointer sur de vieux indices.
+      chart.timeScale().scrollToRealTime()
     }
 
     const paintLivePoint = (price: number) => {
@@ -407,16 +402,7 @@ const PriceChart = forwardRef<PriceChartHandle, { symbol: string }>(({ symbol },
     const next = !isLive
     setIsLive(next)
     isLiveRef.current = next
-    if (next) {
-      const buf = bufferRef.current
-      if (buf.length > 0 && chartRef.current) {
-        const lastIdx = buf.length - 1
-        chartRef.current.timeScale().setVisibleLogicalRange({
-          from: Math.max(0, lastIdx - VISIBLE_BARS + 1),
-          to:   lastIdx + 8,
-        })
-      }
-    }
+    if (next) chartRef.current?.timeScale().scrollToRealTime()
   }
 
   const tc = TC[theme]
