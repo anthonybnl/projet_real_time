@@ -1,10 +1,9 @@
 'use client'
-import type { Trade, WindowStats } from '@/types'
+import type { WindowStats } from '@/types'
 
 interface MarketOverviewProps {
   stats60: Partial<WindowStats>
   stats300: Partial<WindowStats>
-  trades: Trade[]
 }
 
 function Bar({ pct, color }: { pct: number; color: string }) {
@@ -15,11 +14,11 @@ function Bar({ pct, color }: { pct: number; color: string }) {
   )
 }
 
-export default function MarketOverview({ stats60, stats300, trades }: MarketOverviewProps) {
-  const buyCount = trades.filter((t) => t.side === 'buy').length
-  const sellCount = trades.filter((t) => t.side === 'sell').length
-  const total = buyCount + sellCount || 1
-  const buyPct = Math.round((buyCount / total) * 100)
+export default function MarketOverview({ stats60, stats300 }: MarketOverviewProps) {
+  const buyVol = stats300.vol_buy ?? 0
+  const sellVol = stats300.vol_sell ?? 0
+  const total = buyVol + sellVol
+  const buyPct = total > 0 ? Math.round((buyVol / total) * 100) : 50
   const sellPct = 100 - buyPct
 
   const fmt = (n?: number) =>
@@ -37,17 +36,17 @@ export default function MarketOverview({ stats60, stats300, trades }: MarketOver
     <div className="bg-crypto-card border border-crypto-border rounded-xl p-4 flex flex-col gap-3" style={{ borderWidth: '0.5px' }}>
       <div className="flex justify-between items-center">
         <span className="text-xs font-medium text-crypto-text">Market overview</span>
-        <span className="text-[11px] text-crypto-dim">1 min · 5 min</span>
+        <span className="text-[11px] text-crypto-dim">5 min</span>
       </div>
 
       {/* High / Low */}
       <div className="grid grid-cols-2 gap-2">
         <div className="bg-crypto-bg rounded-lg px-3 py-2">
-          <div className="text-[10px] text-crypto-dim mb-0.5">High (1m)</div>
+          <div className="text-[10px] text-crypto-dim mb-0.5">High (5m)</div>
           <div className="text-sm font-mono text-crypto-green">{fmt(stats60.high)}</div>
         </div>
         <div className="bg-crypto-bg rounded-lg px-3 py-2">
-          <div className="text-[10px] text-crypto-dim mb-0.5">Low (1m)</div>
+          <div className="text-[10px] text-crypto-dim mb-0.5">Low (5m)</div>
           <div className="text-sm font-mono text-crypto-red">{fmt(stats60.low)}</div>
         </div>
       </div>
@@ -92,7 +91,7 @@ export default function MarketOverview({ stats60, stats300, trades }: MarketOver
 
       {/* Trade count */}
       <div className="flex justify-between text-[11px]">
-        <span className="text-crypto-dim">Trades (1 min)</span>
+        <span className="text-crypto-dim">Trades (5 min)</span>
         <span className="font-mono text-crypto-text">{stats60.count ?? 0}</span>
       </div>
     </div>

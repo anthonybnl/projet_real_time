@@ -42,8 +42,8 @@ export interface AnomalyData {
   trigger_message?: AnomalyTrigger | null
 }
 
-// Stats par fenetre, toujours partielles cote front (certains champs sont
-// calcules localement : high/low, ou approximes : vwap/notional).
+// Stats par fenetre, toujours partielles cote front (notional approxime
+// depuis vwap * volume ; le reste vient directement de l'agregat backend).
 export interface WindowStats {
   symbol?: string
   window?: number
@@ -55,6 +55,8 @@ export interface WindowStats {
   low?: number
   total_volume?: number
   total_notional?: number
+  vol_buy?: number
+  vol_sell?: number
 }
 
 // Une fenetre d'agregation telle que poussee par le backend (analytics v2).
@@ -62,6 +64,10 @@ export interface WindowAgg {
   volume: number
   avg_price: number | null
   trades_count: number
+  high: number | null
+  low: number | null
+  vol_buy: number
+  vol_sell: number
 }
 
 export interface AnalyticsData {
