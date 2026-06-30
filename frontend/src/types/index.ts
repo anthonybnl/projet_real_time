@@ -17,6 +17,21 @@ export type AnomalyType =
   | 'VPIN'
   | 'WHALE_ALERT'
 
+// Le trade brut a l'origine de l'anomalie (champs variables selon la source).
+export interface AnomalyTrigger {
+  price?: number
+  trade_size?: number
+  volume?: number
+  size?: number
+  q?: number
+  side?: string
+  source?: string
+  product_id?: string
+  id?: number | string
+  timestamp?: string | number
+  [key: string]: unknown
+}
+
 export interface AnomalyData {
   id?: string
   anomaly_type: AnomalyType
@@ -24,6 +39,7 @@ export interface AnomalyData {
   exchange: string
   symbol: string
   details: Record<string, unknown> & { description?: string }
+  trigger_message?: AnomalyTrigger | null
 }
 
 // Stats par fenetre, toujours partielles cote front (certains champs sont

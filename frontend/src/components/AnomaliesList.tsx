@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import gsap from 'gsap'
-import type { AnomalyData, AnomalyType } from '@/types'
+import type { AnomalyData, AnomalyTrigger, AnomalyType } from '@/types'
 
 function fmt(ts: number) {
   return new Date(ts * 1000).toLocaleTimeString('fr-FR', {
@@ -150,6 +150,39 @@ function formatDetailValue(key: string, value: unknown): string {
   return String(value)
 }
 
+const SIDE_LABELS: Record<string, { label: string; color: string }> = {
+  buy: { label: 'Achat', color: '#34d399' },
+  sell: { label: 'Vente', color: '#f87171' },
+}
+
+function triggerSide(t: AnomalyTrigger): { label: string; color: string } | null {
+  let side = typeof t.side === 'string' ? t.side.toLowerCase() : null
+  if (!side && typeof t.m === 'boolean') side = t.m ? 'sell' : 'buy'
+  if (!side) return null
+  return SIDE_LABELS[side] ?? { label: side, color: '#cbd5e1' }
+}
+
+function num(value: unknown): number | null {
+  const n = typeof value === 'string' ? Number(value) : value
+  return typeof n === 'number' && Number.isFinite(n) ? n : null
+}
+
+function triggerFields(t: AnomalyTrigger): { key: string; label: string; value: string }[] {
+  const fields: { key: string; label: string; value: string }[] = []
+
+  const price = num(t.price ?? t.p)
+  if (price !== null) {
+    fields.push({ key: 'price', label: 'Prix', value: price.toLocaleString('fr-FR', { maximumFractionDigits: 2 }) })
+  }
+
+  const size = num(t.trade_size ?? t.volume ?? t.size ?? t.q)
+  if (size !== null) {
+    fields.push({ key: 'trade_size', label: 'Taille du trade', value: size.toLocaleString('fr-FR', { maximumFractionDigits: 8 }) })
+  }
+
+  return fields
+}
+
 function popoverFields(anomaly: AnomalyData): { key: string; label: string; value: string }[] {
   const skip = new Set(['description', 'rule_intensities', 'rule_weights'])
   return Object.entries(anomaly.details ?? {})
@@ -170,6 +203,9 @@ function AnomalyPopover({
 }) {
   const s = anomalyStyle(anomaly.anomaly_type)
   const fields = popoverFields(anomaly)
+  const trigger = anomaly.trigger_message ?? null
+  const triggerData = trigger ? triggerFields(trigger) : []
+  const side = trigger ? triggerSide(trigger) : null
 
   return (
     <div
@@ -242,6 +278,36 @@ function AnomalyPopover({
               </div>
             ))}
           </dl>
+        )}
+
+        {(triggerData.length > 0 || side) && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <span className="text-[9px] uppercase tracking-wide text-crypto-dim">Trade déclencheur</span>
+              <span className="flex-1 h-px bg-white/[0.08]" />
+              {side && (
+                <span
+                  className="text-[9px] font-bold px-1.5 py-0.5 rounded uppercase tracking-wide"
+                  style={{ background: `${side.color}22`, color: side.color }}
+                >
+                  {side.label}
+                </span>
+              )}
+            </div>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
+              {triggerData.map(({ key, label, value }) => (
+                <div
+                  key={key}
+                  className="min-w-0 rounded-lg px-2.5 py-2 bg-white/[0.04] border border-white/[0.06]"
+                >
+                  <dt className="text-[9px] uppercase tracking-wide text-crypto-dim">{label}</dt>
+                  <dd className="text-[12px] text-crypto-text font-mono tabular-nums mt-1 break-all leading-snug">
+                    {value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
         )}
       </div>
     </div>

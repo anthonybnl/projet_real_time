@@ -99,6 +99,7 @@ def _normalize_anomaly_doc(doc: dict) -> dict:
         "exchange": doc.get("exchange", "unknown"),
         "symbol": doc.get("symbol", DEFAULT_SYMBOL),
         "details": doc.get("details", {}),
+        "trigger_message": doc.get("trigger_message"),
     }
 
 
